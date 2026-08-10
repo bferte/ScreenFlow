@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-[#0f1014] text-neutral-200 antialiased;
+    font-family: ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm
+           font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply btn bg-indigo-500 text-white hover:bg-indigo-400;
+  }
+  .btn-danger {
+    @apply btn bg-red-500 text-white hover:bg-red-400;
+  }
+  .btn-ghost {
+    @apply btn border border-edge bg-surface text-neutral-300 hover:bg-edge;
+  }
+  .panel {
+    @apply rounded-xl border border-edge bg-panel;
+  }
+  .label {
+    @apply text-xs font-medium uppercase tracking-wider text-neutral-500;
+  }
+}
