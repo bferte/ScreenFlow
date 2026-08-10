@@ -243,6 +243,48 @@ sur le fichier légitime. → Host explicite : `screenflow://local/C:/…`.
 sans lever d'erreur**. → En-tête `Access-Control-Allow-Origin` sur le protocole +
 `crossOrigin='anonymous'` sur les éléments audio.
 
+### `useMemo` + destruction dans un effet = objet mort en StrictMode
+
+Le piège le plus coûteux du projet, parce qu'il est **intermittent**.
+
+```ts
+const pool = useMemo(() => new MediaPool(...), [key])   // ❌
+useEffect(() => () => pool.dispose(), [pool])
+```
+
+React 18 en `StrictMode` monte les effets, les démonte, puis les remonte —
+**sans recalculer les `useMemo`**. L'objet est donc détruit au faux démontage et
+jamais reconstruit. Ici, tous les `get()` renvoyaient `null` et le canvas se
+remplissait de noir sans la moindre erreur.
+
+L'intermittence vient de ceci : le double-montage n'a lieu qu'au **montage
+initial**, pas après une mise à jour HMR. Tester après un rechargement à chaud
+donne une app qui marche ; démarrer à froid la casse. On peut y perdre un temps
+considérable en croyant à un correctif qui n'en était pas un.
+
+> **Toute ressource détruite par un effet doit être créée par ce même effet**,
+> jamais par un `useMemo` en amont. Voir `pool` et `avatarSource` dans
+> `Editor.tsx` pour le motif correct.
+
+`MediaPool.describe()` distingue explicitement « pas encore chargé » de
+« pool détruit » — sans cette distinction, le diagnostic est indécidable.
+
+### Un échec de nettoyage ne doit jamais détruire la donnée
+
+Sur Windows, `rename` refuse de remplacer un fichier dont un handle reste
+ouvert, et celui de ffmpeg survit quelques centaines de millisecondes à son
+propre processus (Defender, indexeur). Le `rename` du remux échouait, puis le
+`fs.rm` de nettoyage échouait aussi — et **cette seconde exception s'échappait**,
+tuant `recording:save` avant l'écriture du manifeste. Une capture entière était
+perdue à cause d'une optimisation de confort.
+
+D'où trois règles : `renameWithRetry` temporise sur `EBUSY`/`EPERM`/`EACCES`,
+`remuxInPlace` ne lève **jamais**, et `recording:list` reconstruit un manifeste
+manquant à partir des fichiers présents.
+
+> **Une étape facultative ne doit pas pouvoir faire échouer l'étape obligatoire
+> qui la précède.**
+
 ### Un élément média détaché ne se charge pas tout seul
 
 `MediaPool` crée ses `<video>` par `document.createElement` sans jamais les insérer dans le

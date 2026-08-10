@@ -9,7 +9,13 @@
  *        --alias:@=./src --outfile=x.cjs && node x.cjs
  */
 import { cacheKey, extractProviderMessage } from '../electron/cache-key'
-import { blockCovers, blockEndMs, type VoiceoverBlock } from '../src/types/voiceover'
+import {
+  blockCovers,
+  blockEndMs,
+  type ImportedVoiceoverBlock,
+  type TtsVoiceoverBlock,
+  type VoiceoverBlock,
+} from '../src/types/voiceover'
 
 let failures = 0
 function check(label: string, condition: boolean, detail = '') {
@@ -17,7 +23,8 @@ function check(label: string, condition: boolean, detail = '') {
   console.log(`  ${condition ? 'OK  ' : 'ECHEC'} ${label}${detail ? `  ${detail}` : ''}`)
 }
 
-const block = (patch: Partial<VoiceoverBlock> = {}): VoiceoverBlock => ({
+const block = (patch: Partial<TtsVoiceoverBlock> = {}): TtsVoiceoverBlock => ({
+  origin: 'tts',
   id: 'vo-1',
   text: 'Bonjour et bienvenue.',
   voiceId: 'alloy',
@@ -29,8 +36,20 @@ const block = (patch: Partial<VoiceoverBlock> = {}): VoiceoverBlock => ({
   ...patch,
 })
 
+const imported = (patch: Partial<ImportedVoiceoverBlock> = {}): ImportedVoiceoverBlock => ({
+  origin: 'imported',
+  id: 'vo-imp',
+  text: 'narration-intro',
+  fileName: 'narration-intro.mp3',
+  audioPath: 'C:/Users/x/Documents/narration-intro.mp3',
+  durationMs: 4200,
+  timelineOffsetMs: 1000,
+  volume: 1,
+  ...patch,
+})
+
 /** The single mutation a drag is allowed to perform. */
-const move = (b: VoiceoverBlock, timelineOffsetMs: number): VoiceoverBlock => ({
+const move = <T extends VoiceoverBlock>(b: T, timelineOffsetMs: number): T => ({
   ...b,
   timelineOffsetMs,
 })
@@ -48,7 +67,9 @@ check('change avec le service', k !== cacheKey('elevenlabs', 'gpt-4o-mini-tts', 
 // necessarily resolves to the same cached file.
 const before = block()
 const after = move(before, 12_345)
-const keyOf = (b: VoiceoverBlock) => cacheKey(b.provider, 'gpt-4o-mini-tts', b.voiceId, b.text)
+// Only synthesised blocks have a cache key at all — an imported file was never
+// fetched, so there is nothing to avoid re-fetching.
+const keyOf = (b: TtsVoiceoverBlock) => cacheKey(b.provider, 'gpt-4o-mini-tts', b.voiceId, b.text)
 check('un bloc deplace vise le meme fichier cache', keyOf(before) === keyOf(after), `(${keyOf(after).slice(0, 12)}…)`)
 
 console.log('\n=== DEPLACEMENT : rien d\'autre ne bouge ===')
@@ -61,8 +82,35 @@ check('volume inchange', after.volume === before.volume)
 check('offset mis a jour', after.timelineOffsetMs === 12_345)
 
 // Everything except the offset must be byte-identical.
-const changed = (Object.keys(before) as (keyof VoiceoverBlock)[]).filter((k2) => before[k2] !== after[k2])
+const changed = (Object.keys(before) as (keyof TtsVoiceoverBlock)[]).filter((k2) => before[k2] !== after[k2])
 check('un seul champ modifie', changed.length === 1 && changed[0] === 'timelineOffsetMs', `(${changed.join(', ')})`)
+
+console.log('\n=== BLOCS IMPORTES ===')
+
+// An imported file must be as safe to move as a generated one, and must never
+// be mistaken for something re-synthesisable.
+const imp = imported()
+const impMoved = move(imp, 7_500)
+const impChanged = (Object.keys(imp) as (keyof ImportedVoiceoverBlock)[]).filter(
+  (k2) => imp[k2] !== impMoved[k2],
+)
+check('deplacement : un seul champ modifie', impChanged.length === 1 && impChanged[0] === 'timelineOffsetMs')
+check('chemin audio preserve', impMoved.audioPath === imp.audioPath)
+check('origine preservee', impMoved.origin === 'imported')
+check('pas de fournisseur', !('provider' in impMoved))
+check('pas de voix', !('voiceId' in impMoved))
+check('couverture identique aux blocs generes', blockCovers(imp, 3000) && !blockCovers(imp, 5200))
+check('fin calculee', blockEndMs(imp) === 5200)
+
+// The two kinds must be distinguishable at runtime, not only at compile time:
+// the ducking and export paths iterate over the mixed list.
+const mixed: VoiceoverBlock[] = [block(), imported()]
+check('liste mixte : 1 genere', mixed.filter((b) => b.origin === 'tts').length === 1)
+check('liste mixte : 1 importe', mixed.filter((b) => b.origin === 'imported').length === 1)
+check(
+  'tous exposent ce dont le mixage a besoin',
+  mixed.every((b) => typeof b.audioPath === 'string' && b.durationMs > 0 && typeof b.volume === 'number'),
+)
 
 console.log('\n=== COUVERTURE TEMPORELLE ===')
 

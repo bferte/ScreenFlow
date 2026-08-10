@@ -57,6 +57,25 @@ export default function Timeline({
 
   const pct = (ms: number) => (durationMs > 0 ? (ms / durationMs) * 100 : 0)
 
+  /**
+   * Positions a span, clipped to the timeline.
+   *
+   * Spans legitimately run past the end: a zoom segment ends at the last click
+   * plus its hold time, which routinely lands beyond the recording. That is
+   * correct as *data* — the camera is still easing out when the video stops —
+   * but as geometry a width over 100% escapes the container and lands on top of
+   * the side panel. Clipping happens here, at the drawing, so the segment
+   * itself keeps its true bounds.
+   */
+  const span = (startMs: number, endMs: number) => {
+    const from = Math.max(0, Math.min(startMs, durationMs))
+    const to = Math.max(from, Math.min(endMs, durationMs))
+    return { left: `${pct(from)}%`, width: `${pct(to - from)}%` }
+  }
+
+  /** True when a point actually falls inside the timeline. */
+  const visible = (ms: number) => ms >= 0 && ms <= durationMs
+
   const seekFromEvent = useCallback(
     (clientX: number) => {
       const el = trackRef.current
@@ -175,7 +194,7 @@ export default function Timeline({
       </div>
 
       {/* Voiceover lane: blocks are dragged here. */}
-      <div className="relative mb-1.5 h-8 rounded-md border border-edge bg-surface">
+      <div className="relative mb-1.5 h-8 overflow-hidden rounded-md border border-edge bg-surface">
         {blocks.length === 0 && (
           <span className="pointer-events-none absolute inset-0 flex items-center pl-2 text-[10px] text-neutral-600">
             Voix-off — génère un bloc pour le poser ici
@@ -185,10 +204,7 @@ export default function Timeline({
           <div
             key={block.id}
             onPointerDown={(e) => startBlockDrag(e, block)}
-            style={{
-              left: `${pct(block.timelineOffsetMs)}%`,
-              width: `${Math.max(0.5, pct(block.durationMs))}%`,
-            }}
+            style={{ ...span(block.timelineOffsetMs, blockEndMs(block)), minWidth: '4px' }}
             className={`absolute inset-y-1 flex cursor-grab items-center overflow-hidden rounded border px-1.5 transition-colors active:cursor-grabbing ${
               dragging === block.id
                 ? snapped
@@ -207,10 +223,13 @@ export default function Timeline({
         ))}
       </div>
 
+      {/* overflow-hidden is a backstop: spans are already clipped by `span()`,
+          but a future lane getting that wrong should stay inside its own box
+          rather than paint over the side panel. */}
       <div
         ref={trackRef}
         onPointerDown={handlePointerDown}
-        className="relative h-16 cursor-pointer rounded-lg border border-edge bg-surface"
+        className="relative h-16 cursor-pointer overflow-hidden rounded-lg border border-edge bg-surface"
       >
         {/* Clip boundaries, so zooms read against the cuts. */}
         {placed.slice(1).map((p) => (
@@ -222,14 +241,16 @@ export default function Timeline({
         ))}
 
         {/* Zoom segments */}
-        {segments.map((s) => (
+        {segments
+          .filter((s) => s.endT > 0 && s.startT < durationMs)
+          .map((s) => (
           <button
             key={`${s.clipId}-${s.id}`}
             onClick={(e) => {
               e.stopPropagation()
               onSelect(s.id === selectedId ? null : s.id)
             }}
-            style={{ left: `${pct(s.startT)}%`, width: `${pct(s.endT - s.startT)}%` }}
+            style={span(s.startT, s.endT)}
             className={`absolute top-2 h-7 rounded border transition-colors ${
               s.id === selectedId
                 ? 'border-indigo-300 bg-indigo-500/50'
@@ -245,7 +266,9 @@ export default function Timeline({
 
         {/* Click markers */}
         <div className="absolute inset-x-0 bottom-2 h-5">
-          {downs.map((c, i) => (
+          {/* A trimmed clip can hold clicks outside its visible range; those
+              have no place on the timeline at all. */}
+          {downs.filter((c) => visible(c.timelineT)).map((c, i) => (
             <span
               key={i}
               style={{ left: `${pct(c.timelineT)}%` }}

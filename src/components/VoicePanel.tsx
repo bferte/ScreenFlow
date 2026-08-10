@@ -6,6 +6,7 @@ import {
   blockEndMs,
   type TtsProvider,
   type TtsSettings,
+  type TtsVoiceoverBlock,
   type VoiceoverBlock,
 } from '@/types/voiceover'
 
@@ -81,6 +82,7 @@ export default function VoicePanel({
         voice: currentVoice || undefined,
       })
       const block: VoiceoverBlock = {
+        origin: 'tts',
         id: nextBlockId(),
         text,
         voiceId: currentVoice,
@@ -100,8 +102,60 @@ export default function VoicePanel({
     }
   }
 
+  /**
+   * Brings in audio synthesised elsewhere.
+   *
+   * Imported files land at the playhead like generated ones and behave
+   * identically from there: same dragging, same ducking contribution, same
+   * export path. Only their provenance differs.
+   */
+  async function importAudio() {
+    setBusy('import')
+    setError(null)
+    try {
+      const files = await window.screenflow.importMedia('audio')
+      if (files.length === 0) return
+
+      const rejected = files.filter((f) => !f.hasAudio || f.durationMs <= 0)
+      if (rejected.length > 0) {
+        setError(
+          `Sans piste audio exploitable : ${rejected.map((f) => f.name).join(', ')}. ` +
+            'Le fichier est peut-être corrompu ou dans un format non supporté.',
+        )
+      }
+
+      // Consecutive files are laid end to end from the playhead rather than
+      // stacked on the same instant, which is almost never what is wanted.
+      let cursor = Math.round(currentMs)
+      const added: VoiceoverBlock[] = files
+        .filter((f) => f.hasAudio && f.durationMs > 0)
+        .map((f) => {
+          const block: VoiceoverBlock = {
+            origin: 'imported',
+            id: nextBlockId(),
+            text: f.name.replace(/\.[^.]+$/, ''),
+            fileName: f.name,
+            audioPath: f.path,
+            durationMs: Math.round(f.durationMs),
+            timelineOffsetMs: cursor,
+            volume: 1,
+          }
+          cursor += Math.round(f.durationMs)
+          return block
+        })
+
+      if (added.length === 0) return
+      setBlocks((prev) => [...prev, ...added])
+      onSelectBlock(added[0].id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   /** Re-synthesises one block in place, keeping its position and volume. */
-  async function regenerate(block: VoiceoverBlock) {
+  async function regenerate(block: TtsVoiceoverBlock) {
     const text = (pending[block.id] ?? block.text).trim()
     if (!text) return
     setBusy(block.id)
@@ -162,6 +216,24 @@ export default function VoicePanel({
             ? 'Synthèse…'
             : `Générer et poser à ${(currentMs / 1000).toFixed(1)}s`}
         </button>
+
+        <div className="mt-3 flex items-center gap-2">
+          <span className="h-px flex-1 bg-edge" />
+          <span className="text-[10px] text-neutral-600">ou</span>
+          <span className="h-px flex-1 bg-edge" />
+        </div>
+
+        <button
+          onClick={importAudio}
+          disabled={busy !== null}
+          className="btn-ghost mt-3 w-full text-[11px]"
+        >
+          {busy === 'import' ? 'Import…' : 'Importer un MP3 déjà synthétisé'}
+        </button>
+        <p className="mt-1.5 text-[10px] leading-relaxed text-neutral-500">
+          Audio produit par un autre outil. Aucune clé requise, et le fichier se comporte
+          ensuite comme un bloc généré : déplaçable, il atténue le reste et part à l'export.
+        </p>
       </div>
 
       {!hasKey && (
@@ -180,15 +252,20 @@ export default function VoicePanel({
       <div className="space-y-2">
         {blocks.length === 0 && (
           <p className="text-[11px] leading-relaxed text-neutral-600">
-            Aucun bloc. Une fois généré, un bloc se déplace à la souris sur la piste verte
-            de la timeline — sans jamais rappeler l'API.
+            Aucun bloc. Génère-le ici ou importe un MP3 : dans les deux cas il se déplace
+            à la souris sur la piste verte de la timeline.
           </p>
         )}
 
         {[...blocks]
           .sort((a, b) => a.timelineOffsetMs - b.timelineOffsetMs)
           .map((block) => {
-            const edited = pending[block.id] !== undefined && pending[block.id] !== block.text
+            // Only a synthesised block can be re-synthesised; for an imported
+            // file the text is just a label, edited in place.
+            const edited =
+              block.origin === 'tts' &&
+              pending[block.id] !== undefined &&
+              pending[block.id] !== block.text
             return (
               <div
                 key={block.id}
@@ -226,13 +303,20 @@ export default function VoicePanel({
                   value={pending[block.id] ?? block.text}
                   rows={2}
                   onClick={(e) => e.stopPropagation()}
-                  onChange={(e) =>
-                    setPending((p) => ({ ...p, [block.id]: e.target.value }))
-                  }
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (block.origin === 'imported') {
+                      setBlocks((prev) =>
+                        prev.map((b) => (b.id === block.id ? { ...b, text: value } : b)),
+                      )
+                    } else {
+                      setPending((p) => ({ ...p, [block.id]: value }))
+                    }
+                  }}
                   className="mt-2 w-full resize-none rounded border border-edge bg-panel px-2 py-1.5 text-[11px] text-neutral-200"
                 />
 
-                {edited && (
+                {edited && block.origin === 'tts' && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
@@ -276,8 +360,10 @@ export default function VoicePanel({
                   </div>
                 </div>
 
-                <p className="mt-1.5 text-[10px] text-neutral-600">
-                  {block.provider === 'openai' ? 'OpenAI' : 'ElevenLabs'} · {block.voiceId || '—'}
+                <p className="mt-1.5 truncate text-[10px] text-neutral-600">
+                  {block.origin === 'tts'
+                    ? `${block.provider === 'openai' ? 'OpenAI' : 'ElevenLabs'} · ${block.voiceId || '—'}`
+                    : `Importé · ${block.fileName}`}
                 </p>
               </div>
             )
