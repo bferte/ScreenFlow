@@ -133,9 +133,30 @@ export default function Editor({ manifest, onBack }: Props) {
   clipsRef.current = clips
   const blocksRef = useRef(blocks)
   blocksRef.current = blocks
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const pool = useMemo(() => new MediaPool(clipsRef.current), [clipIdentity])
-  useEffect(() => () => pool.dispose(), [pool])
+  /**
+   * The pool is built by the effect, not by a memo, and that is not a stylistic
+   * choice.
+   *
+   * StrictMode runs setup → cleanup → setup on mount. The cleanup disposes the
+   * pool, which empties it — and a memoised pool is *not* rebuilt when the
+   * effect runs again, so every later `get()` returns null and the preview
+   * stays black. Only in development: a production build mounts once, which is
+   * exactly why this survived. Owning the pool from inside the effect means a
+   * cleanup is always followed by a fresh one.
+   *
+   * The initial pool is empty on purpose — it holds no element and fetches
+   * nothing, so the effect's pool is the only one that ever loads media.
+   */
+  const [pool, setPool] = useState(() => new MediaPool([]))
+  useEffect(() => {
+    const next = new MediaPool(clipsRef.current)
+    setPool((previous) => {
+      previous.dispose()
+      return next
+    })
+    return () => next.dispose()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipIdentity])
 
   // Clip volume is applied per frame in `handleFrame`, where the ducking gain
   // is also known — setting it here as well would just fight that.
