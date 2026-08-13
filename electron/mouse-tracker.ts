@@ -72,13 +72,33 @@ class MouseTracker {
     }
   }
 
+  /**
+   * Brings a uiohook point into the same space as the cursor samples.
+   *
+   * The hook reports raw Windows screen pixels, while `getCursorScreenPoint`
+   * and `display.bounds` are DIPs. On a single display the two spaces coincide
+   * and the difference is invisible — but as soon as monitors run at different
+   * scale factors, Chromium lays the DIP desktop out on its own, and a display
+   * ends up at an origin that has nothing to do with its physical one. Clicks
+   * then land offset by that difference, dragging both the zoom targets and
+   * the annotation rings away from where the user actually clicked.
+   */
+  private toDip(x: number, y: number) {
+    if (process.platform !== 'win32') return { x, y }
+    return screen.screenToDipPoint({ x, y })
+  }
+
   private onMouseEvent = (pressed: boolean) => (e: { x: number; y: number; button: number }) => {
     if (!this.display) return
-    const { nx, ny } = this.normalise(e.x, e.y)
+    const point = this.toDip(e.x, e.y)
+    const { nx, ny } = this.normalise(point.x, point.y)
+    // A click on another monitor is not part of this recording: keeping it
+    // would place a zoom on a spot the captured display never showed.
+    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return
     this.clicks.push({
       t: Date.now() - this.startedAt,
-      x: e.x,
-      y: e.y,
+      x: point.x,
+      y: point.y,
       nx,
       ny,
       button: BUTTON_MAP[e.button] ?? 'left',
@@ -99,7 +119,16 @@ class MouseTracker {
     this.timer = setInterval(() => {
       const p = screen.getCursorScreenPoint()
       const { nx, ny } = this.normalise(p.x, p.y)
-      this.cursor.push({ t: Date.now() - this.startedAt, x: p.x, y: p.y, nx, ny })
+      // Clamped rather than dropped: the cursor wandering onto a second screen
+      // must not leave a hole in the trajectory, and auto-framing should hold
+      // at the edge it left through instead of chasing a point off-frame.
+      this.cursor.push({
+        t: Date.now() - this.startedAt,
+        x: p.x,
+        y: p.y,
+        nx: Math.min(1, Math.max(0, nx)),
+        ny: Math.min(1, Math.max(0, ny)),
+      })
     }, 1000 / SAMPLE_HZ)
 
     if (uiohook) {
