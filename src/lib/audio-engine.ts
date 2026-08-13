@@ -1,3 +1,4 @@
+import { DEFAULT_CLICK_SOUND } from './click-sound'
 import type { DuckingOptions } from './ducking'
 
 export interface AudioOptions extends DuckingOptions {
@@ -9,6 +10,8 @@ export interface AudioOptions extends DuckingOptions {
   /** Play a synthesised click at each recorded click. Off by default: it adds
    *  a sound the capture never contained, which has to be a deliberate choice. */
   clickSound: boolean
+  /** Which sound from the palette in `click-sound.ts`. */
+  clickSoundId: string
   clickVolume: number
 }
 
@@ -18,6 +21,7 @@ export const DEFAULT_AUDIO_OPTIONS: AudioOptions = {
   voiceVolume: 1,
   ducking: true,
   clickSound: false,
+  clickSoundId: DEFAULT_CLICK_SOUND,
   clickVolume: 0.8,
   duckAmount: 0.75,
   duckThresholdDb: -42,

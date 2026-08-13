@@ -59,7 +59,7 @@ L'éditeur ne modifie jamais les fichiers sources. Il construit à la volée :
 - une **trajectoire de caméra** (zoom + panoramique) à partir des clics ;
 - une **couche d'annotations** (cercles, spotlight) à partir des clics et du curseur ;
 - une **enveloppe de ducking** à partir du niveau du micro ;
-- un **son de clic** synthétisé à chaque clic enregistré, si on l'active.
+- un **son de clic** synthétisé à chaque clic enregistré, si on l'active (six timbres au choix).
 
 Tout est recalculé instantanément quand un réglage bouge.
 
@@ -91,7 +91,7 @@ puis muxé. Résultat : un MP4 h264 + aac.
 │  overlays.ts        cercles, spotlight, échantillonnage curseur   │
 │  compositor.ts      ⭐ rendu d'une image de clip                  │
 │  renderer.ts        ⭐ rendu de la séquence + overlays timeline   │
-│  click-sound.ts     clic synthétisé, planifié sur les clics       │
+│  click-sound.ts     palette de clics synthétisés + planification  │
 │  ducking.ts         courbe d'atténuation globale timeline         │
 │  speech-sources.ts  collecte micro + voix-off pour le ducking     │
 │  audio-engine.ts    graphe Web Audio d'un enregistrement          │
@@ -284,10 +284,23 @@ Une capture d'écran est muette sur la seule chose que le spectateur a besoin de
 moment où quelque chose a été pressé. La télémétrie le sait déjà, donc le son en est *dérivé*
 comme le reste du montage — aucun fichier d'asset, rien à resynchroniser avec la vidéo.
 
-La synthèse empile trois couches, ce qui le fait entendre comme un clic **mécanique** plutôt
-que comme un bip : un transitoire de bruit pour l'impact, un tick aigu court pour le
-contacteur, et un corps grave qui décroît assez lentement pour être ressenti. Volontairement
-plus gras qu'une vraie souris — il doit tenir à côté d'une voix-off.
+Chaque son empile des **couches** : du bruit pour un impact, un ton aigu court pour un
+contacteur, un ton grave qui décroît assez lentement pour être ressenti. C'est ce qui fait
+entendre un objet frappé plutôt qu'un bip. Un son est donc de la *donnée*, pas du code —
+en ajouter un, c'est ajouter des couches, et il hérite de la même synthèse, de la même
+normalisation et du même fondu que les autres.
+
+| Son | Caractère |
+|---|---|
+| Clic de souris | Net et sec, le défaut |
+| Clic doux | Feutré, sans attaque agressive |
+| Touche mécanique | Le clic, puis la **butée** 20 ms après — ce qui fait entendre la course d'une touche plutôt qu'un contact unique |
+| Touche de portable | Chiclet mat et court, presque sans résonance |
+| Machine à écrire | Frappe métallique appuyée, très présente |
+| Pop | Bulle synthétique, aucune couche de bruit |
+
+Le choix se fait dans l'onglet Audio, et changer de son en **joue** un aussitôt : une liste de
+noms seule obligerait à tous les essayer un par un pour trouver le bon.
 
 Le bruit est déterministe : l'aperçu et le mix exporté doivent synthétiser exactement la même
 onde, `Math.random` en donnerait une différente à chacun. Les clics sont atténués par le
@@ -315,7 +328,7 @@ npx esbuild scripts/zoomcheck.ts --bundle --platform=node --format=cjs --outfile
 | `scripts/protocol-check.cjs` | Routage du scheme, 206/416, garde de traversée de chemin |
 | `scripts/seqcheck.ts` | Frontières de clips, rognage, découpe sans dérive, géométrie 9:16, auto-framing |
 | `scripts/voicecheck.ts` | Clé de cache indépendante de la position, déplacement n'altérant qu'un champ, bridage |
-| `scripts/clickcheck.ts` | Forme d'onde du clic, déterminisme de la synthèse, planification sur clips rognés |
+| `scripts/clickcheck.ts` | Forme d'onde de chaque son, déterminisme de la synthèse, planification sur clips rognés |
 
 `protocol-check.cjs` se lance avec `npx electron`, les autres avec Node après bundling esbuild
 (`--external:electron --external:ffmpeg-static`, et sortie **dans le projet** pour que la

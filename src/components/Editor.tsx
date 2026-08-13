@@ -28,7 +28,7 @@ import { blockCovers, type VoiceoverBlock } from '@/types/voiceover'
 import { Sequence } from '@/lib/sequence'
 import { MediaPool } from '@/lib/media-pool'
 import { SequenceRenderer, outputSize, type ClipRuntime } from '@/lib/renderer'
-import { ClickTrack, collectClickTimes } from '@/lib/click-sound'
+import { CLICK_SOUNDS, ClickTrack, collectClickTimes } from '@/lib/click-sound'
 import type { AspectRatio, Clip, FramingMode } from '@/types/project'
 import type { RecordingManifest, Telemetry } from '@/types/telemetry'
 
@@ -281,7 +281,8 @@ export default function Editor({ manifest, onBack }: Props) {
   useEffect(() => {
     clickTrackRef.current.enabled = audioOpts.clickSound
     clickTrackRef.current.volume = audioOpts.clickVolume
-  }, [audioOpts.clickSound, audioOpts.clickVolume])
+    clickTrackRef.current.setSound(audioOpts.clickSoundId)
+  }, [audioOpts.clickSound, audioOpts.clickVolume, audioOpts.clickSoundId])
 
   useEffect(() => {
     const track = clickTrackRef.current
@@ -641,7 +642,7 @@ export default function Editor({ manifest, onBack }: Props) {
               hasSystem={clips.some((c) => c.kind === 'recording' && !!c.manifest.systemAudioPath)}
               duckGain={duckGain}
               clickCount={clickTimesMs.length}
-              onPreviewClick={() => clickTrackRef.current.preview()}
+              onPreviewClick={(soundId) => clickTrackRef.current.preview(soundId)}
             />
           )}
           {tab === 'voice' && (
@@ -850,7 +851,7 @@ function AudioPanel({
   hasSystem: boolean
   duckGain: number
   clickCount: number
-  onPreviewClick: () => void
+  onPreviewClick: (soundId: string) => void
 }) {
   return (
     <div className="space-y-5">
@@ -917,6 +918,29 @@ function AudioPanel({
               ? `${clickCount} clic(s) sonorisés, à l'aperçu comme à l'export.`
               : 'Aucun clic enregistré dans cette capture.'}
           </p>
+          <label className="block">
+            <span className="text-xs text-neutral-400">Son</span>
+            <select
+              value={opts.clickSoundId}
+              onChange={(e) => {
+                const clickSoundId = e.target.value
+                setOpts((o) => ({ ...o, clickSoundId }))
+                // Audition on pick: choosing from a list of names alone would
+                // mean toggling through all of them to find the right one.
+                onPreviewClick(clickSoundId)
+              }}
+              className="mt-2 w-full rounded border border-edge bg-surface px-2 py-1.5 text-xs text-neutral-300"
+            >
+              {CLICK_SOUNDS.map((sound) => (
+                <option key={sound.id} value={sound.id}>
+                  {sound.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="-mt-3 text-[11px] leading-relaxed text-neutral-500">
+            {CLICK_SOUNDS.find((s) => s.id === opts.clickSoundId)?.hint}
+          </p>
           <Slider
             label="Volume des clics"
             value={opts.clickVolume}
@@ -926,7 +950,10 @@ function AudioPanel({
             format={(v) => `${Math.round(v * 100)} %`}
             onChange={(clickVolume) => setOpts((o) => ({ ...o, clickVolume }))}
           />
-          <button onClick={onPreviewClick} className="btn-ghost w-full text-xs">
+          <button
+            onClick={() => onPreviewClick(opts.clickSoundId)}
+            className="btn-ghost w-full text-xs"
+          >
             Écouter
           </button>
         </>

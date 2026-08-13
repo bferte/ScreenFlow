@@ -8,7 +8,7 @@
  * Run: npx esbuild scripts/clickcheck.ts --bundle --platform=node --format=cjs \
  *        --outfile=.check/c.cjs && node .check/c.cjs
  */
-import { renderClickBuffer, collectClickTimes } from '../src/lib/click-sound'
+import { CLICK_SOUNDS, DEFAULT_CLICK_SOUND, renderClickBuffer, collectClickTimes } from '../src/lib/click-sound'
 import type { PlacedClip } from '../src/lib/sequence'
 import type { Clip } from '../src/types/project'
 import type { ClickEvent, Telemetry } from '../src/types/telemetry'
@@ -40,38 +40,81 @@ function fakeContext(sampleRate: number) {
   } as unknown as BaseAudioContext
 }
 
-console.log('=== FORME D ONDE ===')
-const a = renderClickBuffer(fakeContext(48000))
-const first = a.getChannelData(0)
+console.log('=== PALETTE ===')
 
-ok('durée ~90 ms', Math.abs(a.duration - 0.09) < 0.001, a.duration.toFixed(4) + 's')
+for (const spec of CLICK_SOUNDS) {
+  const buffer = renderClickBuffer(fakeContext(48000), spec.id)
+  const data = buffer.getChannelData(0)
 
-let peak = 0
-for (const v of first) peak = Math.max(peak, Math.abs(v))
-ok('normalisé sous 0 dBFS', peak > 0.85 && peak <= 0.9001, peak.toFixed(4))
+  let peak = 0
+  let peakAt = 0
+  for (let i = 0; i < data.length; i++) {
+    if (Math.abs(data[i]) > peak) {
+      peak = Math.abs(data[i])
+      peakAt = i
+    }
+  }
 
-ok('démarre sur le transitoire', Math.abs(first[0]) > 0.2, first[0].toFixed(4))
-ok('se termine sur le silence', Math.abs(first[first.length - 1]) < 1e-6, first[first.length - 1])
+  // Energy has to be front-loaded, or it reads as a tone rather than an impact.
+  const half = Math.floor(data.length / 2)
+  let head = 0
+  let tail = 0
+  for (let i = 0; i < data.length; i++) {
+    if (i < half) head += data[i] * data[i]
+    else tail += data[i] * data[i]
+  }
 
-// Energy has to be front-loaded, or it reads as a tone rather than an impact.
-const half = Math.floor(first.length / 2)
-let head = 0
-let tail = 0
-for (let i = 0; i < first.length; i++) {
-  if (i < half) head += first[i] * first[i]
-  else tail += first[i] * first[i]
+  const again = renderClickBuffer(fakeContext(48000), spec.id).getChannelData(0)
+  let identical = data.length === again.length
+  for (let i = 0; identical && i < data.length; i++) identical = data[i] === again[i]
+
+  const pass =
+    Math.abs(buffer.duration - spec.durationMs / 1000) < 0.001 &&
+    peak > 0.85 &&
+    peak <= 0.9001 &&
+    // Percussive by construction: the loudest moment is the attack, not
+    // somewhere in the middle. A pure tone starts at zero and still passes.
+    peakAt < data.length * 0.2 &&
+    data[data.length - 1] === 0 &&
+    head > tail * 4 &&
+    identical
+
+  ok(
+    spec.label.padEnd(22),
+    pass,
+    `${spec.durationMs}ms  crête ${peak.toFixed(3)} à ${((peakAt / 48000) * 1000).toFixed(1)}ms  ` +
+      `attaque ${(head / tail).toFixed(1)}x  ${identical ? 'déterministe' : 'NON DETERMINISTE'}`,
+  )
 }
-ok('énergie concentrée à l attaque', head > tail * 10, (head / tail).toFixed(1) + 'x')
 
-console.log('\n=== DETERMINISME ===')
-const b = renderClickBuffer(fakeContext(48000))
-const second = b.getChannelData(0)
-let identical = first.length === second.length
-for (let i = 0; identical && i < first.length; i++) identical = first[i] === second[i]
-ok('deux synthèses donnent le même échantillon', identical)
+console.log('\n=== DETAILS ===')
 
-const c = renderClickBuffer(fakeContext(44100))
+// The mechanical key's second impact is what separates it from a plain click:
+// there must be real energy well after the first one has decayed.
+const mech = renderClickBuffer(fakeContext(48000), 'mech-key').getChannelData(0)
+let beforeBottom = 0
+let afterBottom = 0
+for (let i = 0; i < mech.length; i++) {
+  if (i / 48000 > 0.02 && i / 48000 < 0.05) afterBottom += mech[i] * mech[i]
+  if (i / 48000 > 0.012 && i / 48000 < 0.019) beforeBottom += mech[i] * mech[i]
+}
+ok('touche mécanique : la butée sonne après le clic', afterBottom > beforeBottom * 2,
+  (afterBottom / beforeBottom).toFixed(1) + 'x')
+
+// Pop carries no noise layer, so it has to be a clean tone.
+const pop = renderClickBuffer(fakeContext(48000), 'pop').getChannelData(0)
+let jumps = 0
+for (let i = 1; i < pop.length; i++) if (Math.abs(pop[i] - pop[i - 1]) > 0.2) jumps++
+ok('pop : aucun bruit, signal lisse', jumps === 0, jumps + ' saut(s)')
+
+const c = renderClickBuffer(fakeContext(44100), DEFAULT_CLICK_SOUND)
 ok('suit la fréquence d échantillonnage', c.length === Math.ceil(0.09 * 44100), c.length)
+
+const fallback = renderClickBuffer(fakeContext(48000), 'inconnu').getChannelData(0)
+const byDefault = renderClickBuffer(fakeContext(48000), DEFAULT_CLICK_SOUND).getChannelData(0)
+let same = fallback.length === byDefault.length
+for (let i = 0; same && i < fallback.length; i++) same = fallback[i] === byDefault[i]
+ok('un identifiant inconnu retombe sur le son par défaut', same)
 
 /* ------------------------------------------------------------------ *
  * Scheduling

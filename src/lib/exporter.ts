@@ -169,7 +169,7 @@ export async function renderAudioMix(
   // same synthesis the preview used, scheduled at the same instants, ducked
   // like system audio so they never fight a voiceover.
   if (opts.clickSound && clickTimesMs.length > 0) {
-    const click = renderClickBuffer(offline)
+    const click = renderClickBuffer(offline, opts.clickSoundId)
     const gain = makeGain(opts.clickVolume, true)
     for (const t of clickTimesMs) {
       if (t < 0 || t >= durationMs) continue
