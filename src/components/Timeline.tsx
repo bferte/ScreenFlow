@@ -57,6 +57,21 @@ export default function Timeline({
 
   const pct = (ms: number) => (durationMs > 0 ? (ms / durationMs) * 100 : 0)
 
+  /**
+   * Clamps a time span to what the track can show.
+   *
+   * A zoom segment ends `holdMs` after its last click, so a click near the end
+   * of a recording legitimately produces an `endT` past the duration — the
+   * camera simply never gets sampled there. Truncating it in the engine would
+   * shorten the release; it is only the *drawing* that must stay inside the
+   * lane, or the block spills over the panel next to it.
+   */
+  const span = (startT: number, endT: number) => {
+    const start = Math.min(Math.max(startT, 0), durationMs)
+    const end = Math.min(Math.max(endT, start), durationMs)
+    return { left: pct(start), width: pct(end - start) }
+  }
+
   const seekFromEvent = useCallback(
     (clientX: number) => {
       const el = trackRef.current
@@ -186,8 +201,11 @@ export default function Timeline({
             key={block.id}
             onPointerDown={(e) => startBlockDrag(e, block)}
             style={{
-              left: `${pct(block.timelineOffsetMs)}%`,
-              width: `${Math.max(0.5, pct(block.durationMs))}%`,
+              left: `${span(block.timelineOffsetMs, blockEndMs(block)).left}%`,
+              // A hair of width even for a block too short to see, but never
+              // past the end: a narration longer than the timeline is pinned to
+              // offset 0 and would otherwise draw wider than the lane.
+              width: `${Math.max(0.5, span(block.timelineOffsetMs, blockEndMs(block)).width)}%`,
             }}
             className={`absolute inset-y-1 flex cursor-grab items-center overflow-hidden rounded border px-1.5 transition-colors active:cursor-grabbing ${
               dragging === block.id
@@ -229,7 +247,10 @@ export default function Timeline({
               e.stopPropagation()
               onSelect(s.id === selectedId ? null : s.id)
             }}
-            style={{ left: `${pct(s.startT)}%`, width: `${pct(s.endT - s.startT)}%` }}
+            style={{
+              left: `${span(s.startT, s.endT).left}%`,
+              width: `${span(s.startT, s.endT).width}%`,
+            }}
             className={`absolute top-2 h-7 rounded border transition-colors ${
               s.id === selectedId
                 ? 'border-indigo-300 bg-indigo-500/50'
