@@ -104,10 +104,25 @@ const MIME: Record<string, string> = {
   '.json': 'application/json',
 }
 
+/**
+ * Turns the pathname of a `screenflow://` URL back into an absolute path.
+ *
+ * `mediaUrl` puts the whole path in the URL's path segment, so the two
+ * platforms arrive in different shapes: a POSIX path keeps its own leading
+ * slash on top of the scheme's (`//Users/...`), while a Windows path comes as
+ * `/C:/...`. Stripping every leading slash would leave the POSIX case
+ * *relative*, so it would match neither root below and 403 on every file.
+ * Only the drive-letter form gives its slash up.
+ */
+function pathFromUrl(pathname: string): string {
+  const collapsed = decodeURIComponent(pathname).replace(/^\/+/, '/')
+  return path.normalize(/^\/[A-Za-z]:/.test(collapsed) ? collapsed.slice(1) : collapsed)
+}
+
 function registerMediaProtocol() {
   protocol.handle('screenflow', async (request) => {
     const url = new URL(request.url)
-    const filePath = path.normalize(decodeURIComponent(url.pathname).replace(/^\/+/, ''))
+    const filePath = pathFromUrl(url.pathname)
 
     // Recordings directory, generated voiceover, or a file the user explicitly
     // imported. normalize() has already collapsed any `..`, so none of these

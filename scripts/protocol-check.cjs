@@ -31,10 +31,16 @@ protocol.registerSchemesAsPrivileged([
 
 app.commandLine.appendSwitch('disable-gpu')
 
+/** Mirrors `pathFromUrl` in electron/main.ts — see the rationale there. */
+function pathFromUrl(pathname) {
+  const collapsed = decodeURIComponent(pathname).replace(/^\/+/, '/')
+  return path.normalize(/^\/[A-Za-z]:/.test(collapsed) ? collapsed.slice(1) : collapsed)
+}
+
 app.whenReady().then(async () => {
   protocol.handle('screenflow', async (request) => {
     const url = new URL(request.url)
-    const filePath = path.normalize(decodeURIComponent(url.pathname).replace(/^\/+/, ''))
+    const filePath = pathFromUrl(url.pathname)
     console.log(`  [handler] hit  url=${request.url}`)
     console.log(`  [handler]      pathname=${url.pathname}  host=${url.host}`)
     console.log(`  [handler]      resolved=${filePath}`)
