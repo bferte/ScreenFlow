@@ -6,6 +6,10 @@ export interface AudioOptions extends DuckingOptions {
   systemVolume: number
   voiceVolume: number
   ducking: boolean
+  /** Play a synthesised click at each recorded click. Off by default: it adds
+   *  a sound the capture never contained, which has to be a deliberate choice. */
+  clickSound: boolean
+  clickVolume: number
 }
 
 export const DEFAULT_AUDIO_OPTIONS: AudioOptions = {
@@ -13,6 +17,8 @@ export const DEFAULT_AUDIO_OPTIONS: AudioOptions = {
   systemVolume: 0.8,
   voiceVolume: 1,
   ducking: true,
+  clickSound: false,
+  clickVolume: 0.8,
   duckAmount: 0.75,
   duckThresholdDb: -42,
   duckAttackMs: 120,

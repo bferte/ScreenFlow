@@ -20,6 +20,8 @@ interface Props {
   audioOpts: AudioOptions
   aspect: AspectRatio
   durationMs: number
+  /** Timeline instants of the recorded clicks, for the synthesised click track. */
+  clickTimesMs: number[]
   /** Pauses playback: decoding for preview and for export at once starves both. */
   onBeforeExport: () => void
 }
@@ -39,6 +41,7 @@ export default function ExportPanel({
   audioOpts,
   aspect,
   durationMs,
+  clickTimesMs,
   onBeforeExport,
 }: Props) {
   const [opts, setOpts] = useState<ExportOptions>(DEFAULT_EXPORT_OPTIONS)
@@ -73,6 +76,7 @@ export default function ExportPanel({
         exportOpts: opts,
         aspect,
         durationMs,
+        clickTimesMs,
         outputPath,
         onProgress: setProgress,
         signal: signalRef.current,
@@ -83,7 +87,18 @@ export default function ExportPanel({
     } finally {
       setProgress(null)
     }
-  }, [clips, blocks, renderer, pool, audioOpts, opts, aspect, durationMs, onBeforeExport])
+  }, [
+    clips,
+    blocks,
+    renderer,
+    pool,
+    audioOpts,
+    opts,
+    aspect,
+    durationMs,
+    clickTimesMs,
+    onBeforeExport,
+  ])
 
   const totalFrames = Math.max(1, Math.floor((durationMs / 1000) * opts.fps))
 

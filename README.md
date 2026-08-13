@@ -58,7 +58,8 @@ L'éditeur ne modifie jamais les fichiers sources. Il construit à la volée :
 
 - une **trajectoire de caméra** (zoom + panoramique) à partir des clics ;
 - une **couche d'annotations** (cercles, spotlight) à partir des clics et du curseur ;
-- une **enveloppe de ducking** à partir du niveau du micro.
+- une **enveloppe de ducking** à partir du niveau du micro ;
+- un **son de clic** synthétisé à chaque clic enregistré, si on l'active.
 
 Tout est recalculé instantanément quand un réglage bouge.
 
@@ -90,6 +91,7 @@ puis muxé. Résultat : un MP4 h264 + aac.
 │  overlays.ts        cercles, spotlight, échantillonnage curseur   │
 │  compositor.ts      ⭐ rendu d'une image de clip                  │
 │  renderer.ts        ⭐ rendu de la séquence + overlays timeline   │
+│  click-sound.ts     clic synthétisé, planifié sur les clics       │
 │  ducking.ts         courbe d'atténuation globale timeline         │
 │  speech-sources.ts  collecte micro + voix-off pour le ducking     │
 │  audio-engine.ts    graphe Web Audio d'un enregistrement          │
@@ -276,6 +278,25 @@ conservé : il se lit comme un plan de réétablissement volontaire, pas comme u
 Attaque rapide (~120 ms), retour lent (~420 ms), plus un temps de maintien (~260 ms) pour que
 les silences entre les mots ne fassent pas pomper le son système.
 
+### Son de clic (désactivé par défaut)
+
+Une capture d'écran est muette sur la seule chose que le spectateur a besoin de suivre : le
+moment où quelque chose a été pressé. La télémétrie le sait déjà, donc le son en est *dérivé*
+comme le reste du montage — aucun fichier d'asset, rien à resynchroniser avec la vidéo.
+
+La synthèse empile trois couches, ce qui le fait entendre comme un clic **mécanique** plutôt
+que comme un bip : un transitoire de bruit pour l'impact, un tick aigu court pour le
+contacteur, et un corps grave qui décroît assez lentement pour être ressenti. Volontairement
+plus gras qu'une vraie souris — il doit tenir à côté d'une voix-off.
+
+Le bruit est déterministe : l'aperçu et le mix exporté doivent synthétiser exactement la même
+onde, `Math.random` en donnerait une différente à chacun. Les clics sont atténués par le
+ducking comme le son système, et ceux qu'un rognage écarte ne sonnent pas — ils annonceraient
+un moment que le montage ne montre pas.
+
+Désactivé par défaut : c'est un son que la capture ne contenait pas, l'ajouter doit rester un
+choix délibéré.
+
 ---
 
 ## Harnais de vérification
@@ -294,6 +315,7 @@ npx esbuild scripts/zoomcheck.ts --bundle --platform=node --format=cjs --outfile
 | `scripts/protocol-check.cjs` | Routage du scheme, 206/416, garde de traversée de chemin |
 | `scripts/seqcheck.ts` | Frontières de clips, rognage, découpe sans dérive, géométrie 9:16, auto-framing |
 | `scripts/voicecheck.ts` | Clé de cache indépendante de la position, déplacement n'altérant qu'un champ, bridage |
+| `scripts/clickcheck.ts` | Forme d'onde du clic, déterminisme de la synthèse, planification sur clips rognés |
 
 `protocol-check.cjs` se lance avec `npx electron`, les autres avec Node après bundling esbuild
 (`--external:electron --external:ffmpeg-static`, et sortie **dans le projet** pour que la

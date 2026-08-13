@@ -1,4 +1,5 @@
 import type { AudioOptions } from './audio-engine'
+import { renderClickBuffer } from './click-sound'
 import { DuckingEnvelope } from './ducking'
 import { collectSpeechSources } from './speech-sources'
 import { audioBufferToWav } from './wav'
@@ -84,6 +85,7 @@ export async function renderAudioMix(
   blocks: VoiceoverBlock[],
   opts: AudioOptions,
   durationMs: number,
+  clickTimesMs: number[] = [],
 ): Promise<{ wav: ArrayBuffer | null; warnings: string[] }> {
   const warnings: string[] = []
   if (durationMs <= 0) return { wav: null, warnings }
@@ -163,6 +165,22 @@ export async function renderAudioMix(
     }
   }
 
+  // Clicks come last because they are the only track with no source file: the
+  // same synthesis the preview used, scheduled at the same instants, ducked
+  // like system audio so they never fight a voiceover.
+  if (opts.clickSound && clickTimesMs.length > 0) {
+    const click = renderClickBuffer(offline)
+    const gain = makeGain(opts.clickVolume, true)
+    for (const t of clickTimesMs) {
+      if (t < 0 || t >= durationMs) continue
+      const source = offline.createBufferSource()
+      source.buffer = click
+      source.connect(gain)
+      source.start(t / 1000)
+    }
+    anyAudio = true
+  }
+
   if (!anyAudio) return { wav: null, warnings }
   return { wav: audioBufferToWav(await offline.startRendering()), warnings }
 }
@@ -180,6 +198,8 @@ export interface ExportRequest {
   exportOpts: ExportOptions
   aspect: AspectRatio
   durationMs: number
+  /** Timeline instants of the recorded clicks, for the synthesised click track. */
+  clickTimesMs: number[]
   outputPath: string
   onProgress: (p: ExportProgress) => void
   signal: { cancelled: boolean }
@@ -198,7 +218,13 @@ export async function runExport(req: ExportRequest): Promise<string> {
     req
 
   onProgress({ phase: 'audio', ratio: 0 })
-  const { wav, warnings } = await renderAudioMix(clips, blocks, audioOpts, durationMs)
+  const { wav, warnings } = await renderAudioMix(
+    clips,
+    blocks,
+    audioOpts,
+    durationMs,
+    req.clickTimesMs,
+  )
   onProgress({ phase: 'audio', ratio: 1, warnings })
 
   const ratio = req.aspect === '9:16' ? 9 / 16 : 16 / 9

@@ -28,6 +28,7 @@ import { blockCovers, type VoiceoverBlock } from '@/types/voiceover'
 import { Sequence } from '@/lib/sequence'
 import { MediaPool } from '@/lib/media-pool'
 import { SequenceRenderer, outputSize, type ClipRuntime } from '@/lib/renderer'
+import { ClickTrack, collectClickTimes } from '@/lib/click-sound'
 import type { AspectRatio, Clip, FramingMode } from '@/types/project'
 import type { RecordingManifest, Telemetry } from '@/types/telemetry'
 
@@ -263,6 +264,31 @@ export default function Editor({ manifest, onBack }: Props) {
   }, [sequence, telemetries, zoomOpts])
 
   /* ---------------------------------------------------------------- *
+   * Synthesised click track
+   * ---------------------------------------------------------------- */
+
+  const clickTimesMs = useMemo(
+    () => collectClickTimes(sequence.placed, telemetries),
+    [sequence, telemetries],
+  )
+
+  const clickTrackRef = useRef<ClickTrack>(new ClickTrack())
+
+  useEffect(() => {
+    clickTrackRef.current.setTimes(clickTimesMs)
+  }, [clickTimesMs])
+
+  useEffect(() => {
+    clickTrackRef.current.enabled = audioOpts.clickSound
+    clickTrackRef.current.volume = audioOpts.clickVolume
+  }, [audioOpts.clickSound, audioOpts.clickVolume])
+
+  useEffect(() => {
+    const track = clickTrackRef.current
+    return () => track.dispose()
+  }, [])
+
+  /* ---------------------------------------------------------------- *
    * Audio engines, one per recording clip
    * ---------------------------------------------------------------- */
 
@@ -378,6 +404,8 @@ export default function Editor({ manifest, onBack }: Props) {
         engine.sync(localMs, isPlaying, id === clipId, gain)
       }
       voiceRef.current.sync(timelineMs, isPlaying)
+      // Ducked with the same gain the export applies to the click track.
+      clickTrackRef.current.sync(timelineMs, isPlaying, gain)
 
       // Imported clips carry their own soundtrack, so a jingle must duck under
       // the voiceover exactly like captured system audio does.
@@ -612,6 +640,8 @@ export default function Editor({ manifest, onBack }: Props) {
               hasMic={clips.some((c) => c.kind === 'recording' && !!c.manifest.micPath)}
               hasSystem={clips.some((c) => c.kind === 'recording' && !!c.manifest.systemAudioPath)}
               duckGain={duckGain}
+              clickCount={clickTimesMs.length}
+              onPreviewClick={() => clickTrackRef.current.preview()}
             />
           )}
           {tab === 'voice' && (
@@ -643,6 +673,7 @@ export default function Editor({ manifest, onBack }: Props) {
               audioOpts={audioOpts}
               aspect={aspect}
               durationMs={durationMs}
+              clickTimesMs={clickTimesMs}
               onBeforeExport={() => playerRef.current?.pause()}
             />
           )}
@@ -810,12 +841,16 @@ function AudioPanel({
   hasMic,
   hasSystem,
   duckGain,
+  clickCount,
+  onPreviewClick,
 }: {
   opts: AudioOptions
   setOpts: React.Dispatch<React.SetStateAction<AudioOptions>>
   hasMic: boolean
   hasSystem: boolean
   duckGain: number
+  clickCount: number
+  onPreviewClick: () => void
 }) {
   return (
     <div className="space-y-5">
@@ -869,6 +904,40 @@ function AudioPanel({
           )}
         </>
       )}
+      <hr className="border-edge" />
+      <Toggle
+        label="Son de clic"
+        checked={opts.clickSound}
+        onChange={(clickSound) => setOpts((o) => ({ ...o, clickSound }))}
+      />
+      {opts.clickSound ? (
+        <>
+          <p className="text-[11px] leading-relaxed text-neutral-500">
+            {clickCount > 0
+              ? `${clickCount} clic(s) sonorisés, à l'aperçu comme à l'export.`
+              : 'Aucun clic enregistré dans cette capture.'}
+          </p>
+          <Slider
+            label="Volume des clics"
+            value={opts.clickVolume}
+            min={0}
+            max={2}
+            step={0.05}
+            format={(v) => `${Math.round(v * 100)} %`}
+            onChange={(clickVolume) => setOpts((o) => ({ ...o, clickVolume }))}
+          />
+          <button onClick={onPreviewClick} className="btn-ghost w-full text-xs">
+            Écouter
+          </button>
+        </>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-neutral-500">
+          Ajoute un clic synthétisé à chaque clic enregistré. La capture n'en contient
+          aucun : c'est un son ajouté au montage.
+        </p>
+      )}
+
+      <hr className="border-edge" />
       <button onClick={() => setOpts(DEFAULT_AUDIO_OPTIONS)} className="btn-ghost w-full text-xs">
         Réinitialiser
       </button>
