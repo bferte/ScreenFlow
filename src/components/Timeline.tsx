@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ClickEvent } from '@/types/telemetry'
-import type { ZoomSegment } from '@/lib/zoom-engine'
+import { MIN_SEGMENT_MS, type ZoomSegment } from '@/lib/zoom-engine'
 import type { PlacedClip } from '@/lib/sequence'
 import { blockEndMs, type VoiceoverBlock } from '@/types/voiceover'
 
@@ -30,6 +30,8 @@ interface Props {
   onSelectBlock: (id: string | null) => void
   /** Called continuously while a block is dragged. */
   onMoveBlock: (id: string, timelineOffsetMs: number) => void
+  /** Called continuously while a zoom's edge is dragged, in timeline time. */
+  onResizeSegment: (clipId: string, id: string, startT: number, endT: number) => void
 }
 
 /** How close, in pixels, a dragged edge must be to snap. */
@@ -50,6 +52,7 @@ export default function Timeline({
   selectedBlockId,
   onSelectBlock,
   onMoveBlock,
+  onResizeSegment,
 }: Props) {
   const trackRef = useRef<HTMLDivElement | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
@@ -160,6 +163,44 @@ export default function Timeline({
     window.addEventListener('pointerup', up)
   }
 
+  /**
+   * Drags one edge of a zoom segment.
+   *
+   * Only the dragged edge moves — the other is the anchor — and the pair is
+   * kept `MIN_SEGMENT_MS` apart so a segment can never be dragged inside out.
+   * Times are reported in timeline coordinates; turning them back into clip
+   * time is the editor's job, since only it knows how the clip is placed.
+   */
+  const startSegmentResize = (
+    e: React.PointerEvent,
+    segment: TimelineSegment,
+    edge: 'start' | 'end',
+  ) => {
+    e.stopPropagation()
+    e.preventDefault()
+    onSelect(segment.id)
+
+    const el = trackRef.current
+    if (!el || durationMs <= 0) return
+    const rect = el.getBoundingClientRect()
+    const msPerPx = durationMs / rect.width
+
+    const move = (ev: PointerEvent) => {
+      const at = Math.min(durationMs, Math.max(0, (ev.clientX - rect.left) * msPerPx))
+      const startT =
+        edge === 'start' ? Math.min(at, segment.endT - MIN_SEGMENT_MS) : segment.startT
+      const endT = edge === 'end' ? Math.max(at, segment.startT + MIN_SEGMENT_MS) : segment.endT
+      onResizeSegment(segment.clipId, segment.id, Math.round(startT), Math.round(endT))
+    }
+
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   const downs = clicks.filter((c) => c.pressed)
 
   return (
@@ -242,9 +283,9 @@ export default function Timeline({
 
         {/* Zoom segments */}
         {segments.map((s) => (
-          <button
+          <div
             key={`${s.clipId}-${s.id}`}
-            onClick={(e) => {
+            onPointerDown={(e) => {
               e.stopPropagation()
               onSelect(s.id === selectedId ? null : s.id)
             }}
@@ -257,12 +298,32 @@ export default function Timeline({
                 ? 'border-indigo-300 bg-indigo-500/50'
                 : 'border-indigo-500/60 bg-indigo-500/25 hover:bg-indigo-500/40'
             }`}
-            title={`Zoom ×${s.scale.toFixed(1)} · ${s.clickCount} clic(s)`}
+            title={
+              `Zoom ×${s.scale.toFixed(1)} · ${s.clickCount} clic(s)` +
+              (s.auto ? '' : ' · réglé à la main') +
+              '\nTire un bord pour changer la durée'
+            }
           >
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-medium text-indigo-100">
               ×{s.scale.toFixed(1)}
             </span>
-          </button>
+            {/* Resize handles. Wider than they look: a 3 px target is a fight. */}
+            {(['start', 'end'] as const).map((edge) => (
+              <span
+                key={edge}
+                onPointerDown={(e) => startSegmentResize(e, s, edge)}
+                className={`absolute inset-y-0 w-2 cursor-ew-resize ${
+                  edge === 'start' ? '-left-1' : '-right-1'
+                }`}
+              >
+                <span
+                  className={`absolute inset-y-1 w-0.5 rounded bg-indigo-200/70 ${
+                    edge === 'start' ? 'left-0.5' : 'right-0.5'
+                  } ${s.id === selectedId ? 'opacity-100' : 'opacity-0'}`}
+                />
+              </span>
+            ))}
+          </div>
         ))}
 
         {/* Click markers */}

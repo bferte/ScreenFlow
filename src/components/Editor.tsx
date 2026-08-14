@@ -6,14 +6,19 @@ import ClipsPanel, { nextClipId } from './ClipsPanel'
 import ExportPanel from './ExportPanel'
 import {
   DEFAULT_ZOOM_OPTIONS,
+  MIN_SEGMENT_MS,
   ZoomTrack,
+  createSegment,
   generateSegments,
+  reshapeSegment,
   type TrackFraming,
   type ZoomOptions,
+  type ZoomSegment,
 } from '@/lib/zoom-engine'
 import {
   DEFAULT_ANNOTATION_OPTIONS,
   createOverlayRenderer,
+  sampleCursor,
   type AnnotationOptions,
   type SpotlightWindow,
 } from '@/lib/overlays'
@@ -54,6 +59,8 @@ export default function Editor({ manifest, onBack }: Props) {
   const [followCursor, setFollowCursor] = useState(true)
 
   const [zoomOpts, setZoomOpts] = useState<ZoomOptions>(DEFAULT_ZOOM_OPTIONS)
+  /** Per clip, present only once its zooms have been taken over by hand. */
+  const [manualSegments, setManualSegments] = useState<Record<string, ZoomSegment[]>>({})
   const [annOpts, setAnnOpts] = useState<AnnotationOptions>(DEFAULT_ANNOTATION_OPTIONS)
   const [audioOpts, setAudioOpts] = useState<AudioOptions>(DEFAULT_AUDIO_OPTIONS)
 
@@ -162,6 +169,30 @@ export default function Editor({ manifest, onBack }: Props) {
   // Clip volume is applied per frame in `handleFrame`, where the ducking gain
   // is also known — setting it here as well would just fight that.
 
+  /**
+   * Zoom segments per recording clip, automatic until a hand touches them.
+   *
+   * Editing one segment takes over the whole clip: the automatic pass keys its
+   * segments on click clusters, so a later change to the clustering settings
+   * would renumber them and land an edit on the wrong zoom. Freezing the list
+   * at the moment of the first edit is the only version of this that cannot
+   * silently move someone's work — and `resetSegments` hands the clip back.
+   */
+  const segmentsByClip = useMemo(() => {
+    const map = new Map<string, ZoomSegment[]>()
+    for (const clip of clipsRef.current) {
+      if (clip.kind !== 'recording') continue
+      const telemetry = telemetries.get(clip.manifest.telemetryPath)
+      if (!telemetry) continue
+      map.set(
+        clip.id,
+        manualSegments[clip.id] ?? generateSegments(telemetry.clicks, zoomOpts, telemetry.cursor),
+      )
+    }
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipIdentity, telemetries, zoomOpts, manualSegments])
+
   const runtimes = useMemo(() => {
     const map = new Map<string, ClipRuntime>()
 
@@ -190,7 +221,7 @@ export default function Editor({ manifest, onBack }: Props) {
         followCursor: followCursor && framingMode === 'crop' && outAspect < sourceWidth / sourceHeight,
       }
 
-      const segments = generateSegments(telemetry.clicks, zoomOpts, telemetry.cursor)
+      const segments = segmentsByClip.get(clip.id) ?? []
       const track = new ZoomTrack(
         clip.manifest.duration,
         segments,
@@ -217,7 +248,17 @@ export default function Editor({ manifest, onBack }: Props) {
     // Keyed on clip identity, not the clip objects: volume and trim edits must
     // not trigger a full spring re-integration on every slider tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clipIdentity, telemetries, zoomOpts, annOpts, outAspect, followCursor, framingMode, outSize])
+  }, [
+    clipIdentity,
+    telemetries,
+    segmentsByClip,
+    zoomOpts,
+    annOpts,
+    outAspect,
+    followCursor,
+    framingMode,
+    outSize,
+  ])
 
   useEffect(() => {
     if (!avatarConfig.imagePath) {
@@ -253,7 +294,7 @@ export default function Editor({ manifest, onBack }: Props) {
       const telemetry = telemetries.get(clip.manifest.telemetryPath)
       if (!telemetry) continue
       const offset = startT - clip.inMs
-      for (const s of generateSegments(telemetry.clicks, zoomOpts, telemetry.cursor)) {
+      for (const s of segmentsByClip.get(clip.id) ?? []) {
         segs.push({ ...s, clipId: clip.id, startT: s.startT + offset, endT: s.endT + offset })
       }
       for (const c of telemetry.clicks) {
@@ -261,7 +302,101 @@ export default function Editor({ manifest, onBack }: Props) {
       }
     }
     return { timelineSegments: segs, timelineClicks: cls }
-  }, [sequence, telemetries, zoomOpts])
+  }, [sequence, telemetries, segmentsByClip])
+
+  /* ---------------------------------------------------------------- *
+   * Hand-edited zooms
+   * ---------------------------------------------------------------- */
+
+  /** Rewrites one clip's segments, taking the clip over on the first edit. */
+  const editSegments = useCallback(
+    (clipId: string, change: (segments: ZoomSegment[]) => ZoomSegment[]) => {
+      setManualSegments((prev) => {
+        const current = prev[clipId] ?? segmentsByClip.get(clipId) ?? []
+        const next = change(current).sort((a, b) => a.startT - b.startT)
+        return { ...prev, [clipId]: next }
+      })
+    },
+    [segmentsByClip],
+  )
+
+  /** Timeline coordinates back to clip-local ones. */
+  const clipOffset = useCallback(
+    (clipId: string) => {
+      const placed = sequence.placed.find((p) => p.clip.id === clipId)
+      return placed ? placed.startT - placed.clip.inMs : 0
+    },
+    [sequence],
+  )
+
+  const handleResizeSegment = useCallback(
+    (clipId: string, id: string, startT: number, endT: number) => {
+      const offset = clipOffset(clipId)
+      const clip = clipsRef.current.find((c) => c.id === clipId)
+      const sourceDuration = clip?.kind === 'recording' ? clip.manifest.duration : durationMs
+      editSegments(clipId, (segments) =>
+        segments.map((s) =>
+          s.id === id ? reshapeSegment(s, startT - offset, endT - offset, sourceDuration) : s,
+        ),
+      )
+    },
+    [clipOffset, durationMs, editSegments],
+  )
+
+  const handleDeleteSegment = useCallback(
+    (clipId: string, id: string) => {
+      editSegments(clipId, (segments) => segments.filter((s) => s.id !== id))
+      setSelectedId(null)
+    },
+    [editSegments],
+  )
+
+  const handleScaleSegment = useCallback(
+    (clipId: string, id: string, scale: number) => {
+      editSegments(clipId, (segments) =>
+        segments.map((s) => (s.id === id ? { ...s, scale, auto: false } : s)),
+      )
+    },
+    [editSegments],
+  )
+
+  /**
+   * Adds a zoom at the playhead, aimed where the cursor was at that instant.
+   *
+   * A hand-placed zoom still has a subject: the point being talked about is
+   * almost always the one under the pointer, and asking for coordinates before
+   * showing anything would be the wrong order.
+   */
+  const handleAddSegment = useCallback(() => {
+    const resolved = sequence.resolve(currentMs)
+    if (!resolved || resolved.placed.clip.kind !== 'recording') return
+    const clip = resolved.placed.clip
+    const telemetry = telemetries.get(clip.manifest.telemetryPath)
+    const at = telemetry ? sampleCursor(telemetry.cursor, resolved.localMs) : null
+    const start = resolved.localMs
+    const end = Math.min(clip.manifest.duration, start + 1600)
+    if (end - start < MIN_SEGMENT_MS) return
+
+    const id = `manuel-${Date.now().toString(36)}`
+    editSegments(clip.id, (segments) => [
+      ...segments,
+      createSegment(id, start, end, at?.nx ?? 0.5, at?.ny ?? 0.5, zoomOpts),
+    ])
+    setSelectedId(id)
+  }, [currentMs, editSegments, sequence, telemetries, zoomOpts])
+
+  const handleResetSegments = useCallback((clipId: string) => {
+    setManualSegments((prev) => {
+      const next = { ...prev }
+      delete next[clipId]
+      return next
+    })
+    setSelectedId(null)
+  }, [])
+
+  /** The clip the playhead is over, which is what the zoom panel acts on. */
+  const activeClipId = sequence.resolve(currentMs)?.placed.clip.id ?? null
+  const selectedSegment = timelineSegments.find((s) => s.id === selectedId) ?? null
 
   /* ---------------------------------------------------------------- *
    * Synthesised click track
@@ -579,6 +714,7 @@ export default function Editor({ manifest, onBack }: Props) {
             selectedBlockId={selectedBlockId}
             onSelectBlock={setSelectedBlockId}
             onMoveBlock={moveBlock}
+            onResizeSegment={handleResizeSegment}
           />
         </div>
       </main>
@@ -632,7 +768,29 @@ export default function Editor({ manifest, onBack }: Props) {
               setFollowCursor={setFollowCursor}
             />
           )}
-          {tab === 'zoom' && <ZoomPanel opts={zoomOpts} setOpts={setZoomOpts} />}
+          {tab === 'zoom' && (
+            <ZoomPanel
+              opts={zoomOpts}
+              setOpts={setZoomOpts}
+              selected={selectedSegment}
+              clipDurationMs={
+                selectedSegment
+                  ? (clips.find((c) => c.id === selectedSegment.clipId) as
+                      | Extract<Clip, { kind: 'recording' }>
+                      | undefined
+                    )?.manifest.duration ?? durationMs
+                  : durationMs
+              }
+              clipOffset={selectedSegment ? clipOffset(selectedSegment.clipId) : 0}
+              manual={activeClipId !== null && manualSegments[activeClipId] !== undefined}
+              canAdd={activeClipId !== null}
+              onAdd={handleAddSegment}
+              onResize={handleResizeSegment}
+              onScale={handleScaleSegment}
+              onDelete={handleDeleteSegment}
+              onReset={() => activeClipId && handleResetSegments(activeClipId)}
+            />
+          )}
           {tab === 'annotations' && <AnnotationPanel opts={annOpts} setOpts={setAnnOpts} />}
           {tab === 'audio' && (
             <AudioPanel
@@ -758,12 +916,83 @@ function FormatPanel({
 function ZoomPanel({
   opts,
   setOpts,
+  selected,
+  clipDurationMs,
+  clipOffset,
+  manual,
+  canAdd,
+  onAdd,
+  onResize,
+  onScale,
+  onDelete,
+  onReset,
 }: {
   opts: ZoomOptions
   setOpts: React.Dispatch<React.SetStateAction<ZoomOptions>>
+  /** The segment under the selection, in timeline time. */
+  selected: TimelineSegment | null
+  clipDurationMs: number
+  clipOffset: number
+  manual: boolean
+  canAdd: boolean
+  onAdd: () => void
+  onResize: (clipId: string, id: string, startT: number, endT: number) => void
+  onScale: (clipId: string, id: string, scale: number) => void
+  onDelete: (clipId: string, id: string) => void
+  onReset: () => void
 }) {
   return (
     <div className="space-y-5">
+      {selected ? (
+        <div className="space-y-4 rounded-md border border-indigo-500/40 bg-indigo-500/5 p-3">
+          <div className="flex items-baseline justify-between">
+            <span className="text-xs font-medium text-indigo-200">
+              Zoom sélectionné{selected.auto ? '' : ' · manuel'}
+            </span>
+            <span className="text-[11px] tabular-nums text-neutral-500">
+              {((selected.endT - selected.startT) / 1000).toFixed(2)} s
+            </span>
+          </div>
+          <Slider label="Facteur de ce zoom" value={selected.scale} min={1} max={4} step={0.1}
+            format={(v) => `×${v.toFixed(1)}`}
+            onChange={(scale) => onScale(selected.clipId, selected.id, scale)} />
+          <Slider label="Début" value={selected.startT} min={0} max={clipDurationMs + clipOffset}
+            step={50} format={(v) => `${(v / 1000).toFixed(2)} s`}
+            onChange={(startT) => onResize(selected.clipId, selected.id, startT, selected.endT)} />
+          <Slider label="Fin" value={selected.endT} min={0} max={clipDurationMs + clipOffset}
+            step={50} format={(v) => `${(v / 1000).toFixed(2)} s`}
+            onChange={(endT) => onResize(selected.clipId, selected.id, selected.startT, endT)} />
+          <button
+            onClick={() => onDelete(selected.clipId, selected.id)}
+            className="w-full rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20"
+          >
+            Supprimer ce zoom
+          </button>
+        </div>
+      ) : (
+        <p className="rounded border border-edge bg-surface px-3 py-2 text-[11px] leading-relaxed text-neutral-500">
+          Clique un bloc ×2 sur la piste pour le régler, ou tire directement un de ses bords
+          pour changer sa durée.
+        </p>
+      )}
+
+      <button onClick={onAdd} disabled={!canAdd} className="btn-ghost w-full text-xs disabled:opacity-40">
+        + Ajouter un zoom à la tête de lecture
+      </button>
+
+      {manual && (
+        <div className="rounded border border-edge bg-surface px-3 py-2">
+          <p className="text-[11px] leading-relaxed text-neutral-500">
+            Les zooms de ce clip sont réglés à la main : les réglages automatiques ci-dessous
+            ne les recalculent plus.
+          </p>
+          <button onClick={onReset} className="btn-ghost mt-2 w-full text-xs">
+            Revenir aux zooms automatiques
+          </button>
+        </div>
+      )}
+
+      <hr className="border-edge" />
       <Slider label="Facteur" value={opts.scale} min={1.2} max={4} step={0.1}
         format={(v) => `×${v.toFixed(1)}`} onChange={(scale) => setOpts((o) => ({ ...o, scale }))} />
       <Slider label="Anticipation" value={opts.leadMs} min={0} max={1000} step={20}

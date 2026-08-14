@@ -1,5 +1,13 @@
 ﻿import { readFileSync } from 'node:fs'
-import { generateSegments, buildZoomTrack, DEFAULT_ZOOM_OPTIONS } from '../src/lib/zoom-engine'
+import {
+  DEFAULT_ZOOM_OPTIONS,
+  MIN_SEGMENT_MS,
+  ZoomTrack,
+  buildZoomTrack,
+  createSegment,
+  generateSegments,
+  reshapeSegment,
+} from '../src/lib/zoom-engine'
 
 const file = process.argv[2]
 const t = JSON.parse(readFileSync(file, 'utf8'))
@@ -136,5 +144,57 @@ expect(
   CLICK_T + DEFAULT_ZOOM_OPTIONS.dwellMaxMs + hold,
 )
 
-console.log(dwellFailures === 0 ? '\n=== TOUT PASSE ===' : `\n=== ${dwellFailures} ECHEC(S) ===`)
-process.exit(dwellFailures === 0 ? 0 : 1)
+if (dwellFailures > 0) console.log(`  ${dwellFailures} echec(s) sur le maintien`)
+
+/* ------------------------------------------------------------------ *
+ * Hand editing
+ * ------------------------------------------------------------------ */
+
+console.log('\n=== EDITION MANUELLE ===')
+
+let editFailures = 0
+function check(label: string, pass: boolean, detail: string | number = '') {
+  console.log(`  ${pass ? 'OK  ' : 'ECHEC'} ${label}${detail === '' ? '' : `  ->  ${detail}`}`)
+  if (!pass) editFailures++
+}
+
+const base = generateSegments(oneClick, DEFAULT_ZOOM_OPTIONS)[0]
+
+const widened = reshapeSegment(base, 500, 8000, 10000)
+check('les bornes suivent le geste', widened.startT === 500 && widened.endT === 8000)
+check('le segment redimensionné est marqué manuel', widened.auto === false)
+
+const inverted = reshapeSegment(base, 5000, 1000, 10000)
+check(
+  'bords croisés : la durée minimale est imposée',
+  inverted.endT - inverted.startT === MIN_SEGMENT_MS,
+  `${inverted.startT}->${inverted.endT}`,
+)
+
+const beyond = reshapeSegment(base, -500, 99999, 10000)
+check('bridé dans la durée du clip', beyond.startT === 0 && beyond.endT === 10000,
+  `${beyond.startT}->${beyond.endT}`)
+
+const late = reshapeSegment(base, 9990, 12000, 10000)
+check(
+  'un début au-delà de la fin laisse la place au minimum',
+  late.startT <= 10000 - MIN_SEGMENT_MS && late.endT === 10000,
+  `${late.startT}->${late.endT}`,
+)
+
+const made = createSegment('manuel-1', 1000, 2600, 0.3, 0.7, DEFAULT_ZOOM_OPTIONS)
+check('un zoom créé à la main ne revendique aucun clic', made.clickCount === 0 && !made.auto)
+check('il vise le point demandé', made.nx === 0.3 && made.ny === 0.7)
+
+// Overlapping is legal once a hand is involved: targetAt takes the last match,
+// so the later segment wins instead of leaving a hole.
+const overlapping = [
+  createSegment('a', 0, 4000, 0.2, 0.2),
+  createSegment('b', 2000, 6000, 0.8, 0.8),
+]
+const overlapTrack = new ZoomTrack(8000, overlapping, DEFAULT_ZOOM_OPTIONS)
+const inOverlap = overlapTrack.sample(3000)
+check('sur recouvrement, le segment le plus tardif gagne', inOverlap.cx > 0.5, inOverlap.cx.toFixed(3))
+
+console.log(editFailures === 0 ? '\n=== TOUT PASSE ===' : `\n=== ${editFailures} ECHEC(S) ===`)
+process.exit(dwellFailures + editFailures === 0 ? 0 : 1)

@@ -221,6 +221,53 @@ function resolveGaps(segments: ZoomSegment[], opts: ZoomOptions): ZoomSegment[] 
 }
 
 /* ------------------------------------------------------------------ *
+ * Hand editing
+ * ------------------------------------------------------------------ */
+
+/** Shortest segment worth having: below this the spring never reaches its target. */
+export const MIN_SEGMENT_MS = 250
+
+/**
+ * Moves a segment's bounds, keeping it valid and marking it hand-edited.
+ *
+ * Segments may overlap once a hand touches them — `targetAt` resolves that by
+ * taking the last match, so an edit can never produce a hole in the trajectory.
+ * Order in the array is therefore what decides a tie, and callers keep it
+ * sorted by start.
+ */
+export function reshapeSegment(
+  segment: ZoomSegment,
+  startT: number,
+  endT: number,
+  durationMs: number,
+): ZoomSegment {
+  const start = Math.min(Math.max(0, startT), Math.max(0, durationMs - MIN_SEGMENT_MS))
+  const end = Math.min(Math.max(start + MIN_SEGMENT_MS, endT), durationMs)
+  return { ...segment, startT: start, endT: end, auto: false }
+}
+
+/** A segment placed by hand, with no click behind it. */
+export function createSegment(
+  id: string,
+  startT: number,
+  endT: number,
+  nx: number,
+  ny: number,
+  opts: ZoomOptions = DEFAULT_ZOOM_OPTIONS,
+): ZoomSegment {
+  return {
+    id,
+    startT,
+    endT,
+    nx,
+    ny,
+    scale: opts.scale,
+    auto: false,
+    clickCount: 0,
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Spring trajectory
  * ------------------------------------------------------------------ */
 

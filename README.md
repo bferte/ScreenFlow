@@ -56,7 +56,7 @@ Juste après l'écriture, chaque conteneur est **remuxé** (`-c copy`, sans pert
 
 L'éditeur ne modifie jamais les fichiers sources. Il construit à la volée :
 
-- une **trajectoire de caméra** (zoom + panoramique) à partir des clics ;
+- une **trajectoire de caméra** (zoom + panoramique) à partir des clics, réglable à la main ;
 - une **couche d'annotations** (cercles, spotlight) à partir des clics et du curseur ;
 - une **enveloppe de ducking** à partir du niveau du micro ;
 - un **son de clic** synthétisé à chaque clic enregistré, si on l'active (six timbres au choix).
@@ -272,6 +272,21 @@ Deux segments proches dans le temps laissaient la caméra retomber vers 1× avan
 un « pompage » visible. Le pontage maintient le zoom et fait glisser la caméra, **mais
 seulement si les deux points de focus sont proches**. Sur un grand déplacement, le dézoom est
 conservé : il se lit comme un plan de réétablissement volontaire, pas comme un défaut.
+
+### Les zooms se reprennent à la main, par clip entier
+
+Tirer le bord d'un bloc sur la piste change sa durée, et un zoom peut être ajouté à la tête
+de lecture — visant l'endroit où était le curseur à cet instant, puisque c'est presque
+toujours le sujet dont on parle.
+
+Toucher **un** segment fait passer **tout le clip** en manuel. Ce n'est pas de la paresse :
+la passe automatique numérote ses segments à partir des grappes de clics, donc changer ensuite
+un réglage de regroupement les renumérote et une modification atterrirait sur le mauvais zoom.
+Figer la liste au moment de la première retouche est la seule version qui ne peut pas déplacer
+le travail de quelqu'un en silence. Un bouton rend le clip à la génération automatique.
+
+Les segments manuels ont le droit de se chevaucher : `targetAt` prend le dernier qui contient
+l'instant, donc un recouvrement produit une priorité, jamais un trou.
 
 ### Maintien du zoom sur curseur immobile (`dwellMaxMs`)
 
