@@ -144,6 +144,43 @@ expect(
   CLICK_T + DEFAULT_ZOOM_OPTIONS.dwellMaxMs + hold,
 )
 
+// The dwell must never cost a segment its own focus. Two clicks far apart with
+// the cursor parked on the first: extending that hold across the second click
+// would let resolveGaps fuse them and centre the zoom between the two — on
+// neither of the things that were clicked.
+const twoPlaces = [
+  { t: 2000, x: 0, y: 0, nx: 0.2, ny: 0.3, button: 'left' as const, pressed: true },
+  { t: 2080, x: 0, y: 0, nx: 0.2, ny: 0.3, button: 'left' as const, pressed: false },
+  { t: 6000, x: 0, y: 0, nx: 0.8, ny: 0.7, button: 'left' as const, pressed: true },
+  { t: 6080, x: 0, y: 0, nx: 0.8, ny: 0.7, button: 'left' as const, pressed: false },
+]
+const parked = []
+for (let t = 0; t <= 12000; t += 16) {
+  const moved = t >= 5800
+  parked.push({ t, x: 0, y: 0, nx: moved ? 0.8 : 0.2, ny: moved ? 0.7 : 0.3 })
+}
+const kept = generateSegments(twoPlaces, DEFAULT_ZOOM_OPTIONS, parked)
+const separated =
+  kept.length === 2 && Math.abs(kept[0].nx - 0.2) < 1e-9 && Math.abs(kept[1].nx - 0.8) < 1e-9
+console.log(
+  `  ${separated ? 'OK  ' : 'ECHEC'} le maintien cède la place au clic suivant  ->  ` +
+    kept.map((s) => s.nx.toFixed(2)).join(' / '),
+)
+if (!separated) dwellFailures++
+
+// ...but a real double click on one spot is still a single zoom.
+const double = [
+  { t: 2000, x: 0, y: 0, nx: 0.4, ny: 0.4, button: 'left' as const, pressed: true },
+  { t: 2080, x: 0, y: 0, nx: 0.4, ny: 0.4, button: 'left' as const, pressed: false },
+  { t: 2260, x: 0, y: 0, nx: 0.41, ny: 0.4, button: 'left' as const, pressed: true },
+  { t: 2340, x: 0, y: 0, nx: 0.41, ny: 0.4, button: 'left' as const, pressed: false },
+]
+const fused = generateSegments(double, DEFAULT_ZOOM_OPTIONS, parked)
+console.log(
+  `  ${fused.length === 1 ? 'OK  ' : 'ECHEC'} un double clic reste un seul zoom  ->  ${fused.length}`,
+)
+if (fused.length !== 1) dwellFailures++
+
 if (dwellFailures > 0) console.log(`  ${dwellFailures} echec(s) sur le maintien`)
 
 /* ------------------------------------------------------------------ *

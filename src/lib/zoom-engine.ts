@@ -159,10 +159,21 @@ export function generateSegments(
     // The hold starts counting from the moment attention leaves, not from the
     // click: typing into the field just clicked must not run the zoom out.
     const dwell = dwellAfter(cursor, last.t, nx, ny, opts.dwellRadius, opts.dwellMaxMs)
+
+    // A dwell means "keep looking here until something else happens", and the
+    // next click *is* something else happening. Without this cap a long dwell
+    // runs into the following segment, `resolveGaps` fuses the two, and the
+    // result is one zoom centred between them — on neither of the two things
+    // that were clicked. The 1 ms is what keeps it a neighbour rather than an
+    // overlap, since the merge test is inclusive.
+    const nextCluster = clusters[i + 1]
+    const nextStart = nextCluster ? Math.max(0, nextCluster[0].t - opts.leadMs) : Infinity
+    const held = Math.min(last.t + dwell + opts.holdMs, Math.max(last.t + opts.holdMs, nextStart - 1))
+
     return {
       id: `auto-${i}`,
       startT: Math.max(0, first.t - opts.leadMs),
-      endT: last.t + dwell + opts.holdMs,
+      endT: held,
       nx,
       ny,
       scale: opts.scale,
