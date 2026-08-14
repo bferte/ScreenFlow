@@ -258,7 +258,17 @@ export async function runExport(req: ExportRequest): Promise<string> {
         throw new Error('Export annulé')
       }
 
-      const tMs = (i / exportOpts.fps) * 1000
+      // The centre of the output frame's interval, not its leading edge.
+      //
+      // An output frame covers [i/fps, (i+1)/fps), and asking for its leading
+      // edge asks for a time that falls exactly on a source frame boundary —
+      // where the decoder may just as well hand back the frame that *ends*
+      // there. Measured on a 30 fps clip exported at 30 fps: 40 of 120 frames
+      // came back identical to the previous one, i.e. a third of the source
+      // dropped. Sampling the middle of the interval is unambiguous and takes
+      // that to 2. A screen recording hides it — most of the frame is static —
+      // but an intro is full-frame motion, so it judders visibly.
+      const tMs = ((i + 0.5) / exportOpts.fps) * 1000
       const resolved = sequence.resolve(tMs)
 
       // Seek only the clip that is on screen. Frames falling on an audio-only
