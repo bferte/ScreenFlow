@@ -45,7 +45,7 @@ Trois flux sont enregistrés **séparément** puis écrits sur disque :
 | `mic.webm` | Micro seul, Opus |
 | `system.webm` | Son système (loopback), Opus |
 | `telemetry.json` | Curseur à 60 Hz + clics horodatés |
-| `manifest.json` | Chemins, durée, drapeau `seekable` |
+| `manifest.json` | Chemins, durée, drapeau `seekable`, nom donné à la capture |
 
 En parallèle, le processus principal échantillonne `screen.getCursorScreenPoint()` à 60 Hz et
 capte les clics globaux via `uiohook-napi`.
@@ -272,6 +272,18 @@ Deux segments proches dans le temps laissaient la caméra retomber vers 1× avan
 un « pompage » visible. Le pontage maintient le zoom et fait glisser la caméra, **mais
 seulement si les deux points de focus sont proches**. Sur un grand déplacement, le dézoom est
 conservé : il se lit comme un plan de réétablissement volontaire, pas comme un défaut.
+
+### Maintien du zoom sur curseur immobile (`dwellMaxMs`)
+
+Cliquer dans un champ puis y taper est **une** action, mais seule sa première moitié est un
+clic : le maintien expirait en pleine phrase et sortait la caméra du champ en train d'être
+rempli. Le compte à rebours ne démarre donc plus au clic, mais **une fois le curseur reparti**.
+
+Un curseur immobile est le signal que l'attention n'a pas bougé — le clavier est utilisé, ou
+l'écran est lu. Aucune capture supplémentaire n'est nécessaire : la trajectoire est déjà
+enregistrée, et rien ne va lire le clavier pour ça. Un plafond (6 s par défaut) évite qu'une
+souris simplement abandonnée fige le zoom indéfiniment, et un rayon de tolérance absorbe le
+tremblement d'une main posée dessus.
 
 ### Ducking asymétrique
 

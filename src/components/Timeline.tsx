@@ -168,7 +168,8 @@ export default function Timeline({
       <div className="relative mb-1.5 flex h-7 overflow-hidden rounded-md border border-edge bg-surface">
         {placed.map((p) => {
           const isRecording = p.clip.kind === 'recording'
-          const label = p.clip.kind === 'recording' ? 'Capture' : p.clip.name
+          const label =
+            p.clip.kind === 'recording' ? p.clip.manifest.name || 'Capture' : p.clip.name
           return (
             <button
               key={p.clip.id}

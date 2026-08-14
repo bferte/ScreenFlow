@@ -43,6 +43,11 @@ const api = {
   saveRecording: (payload: SavePayload): Promise<RecordingManifest> =>
     ipcRenderer.invoke('recording:save', payload),
   listRecordings: (): Promise<RecordingManifest[]> => ipcRenderer.invoke('recording:list'),
+  renameRecording: (id: string, name: string): Promise<RecordingManifest> =>
+    ipcRenderer.invoke('recording:rename', id, name),
+  /** Resolves `{ trashed: false }` when the platform had no trash to move it to. */
+  deleteRecording: (id: string): Promise<{ trashed: boolean }> =>
+    ipcRenderer.invoke('recording:delete', id),
   readTelemetry: (telemetryPath: string): Promise<Telemetry> =>
     ipcRenderer.invoke('recording:read-telemetry', telemetryPath),
   reveal: (target: string): Promise<void> => ipcRenderer.invoke('recording:reveal', target),

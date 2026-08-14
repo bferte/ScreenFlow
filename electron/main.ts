@@ -330,6 +330,54 @@ ipcMain.handle('recording:reveal', (_e, target: string) => {
   shell.showItemInFolder(target)
 })
 
+/**
+ * Resolves a recording id to its directory, refusing anything outside the
+ * recordings root.
+ *
+ * The id arrives from the renderer, and the two handlers below rename and
+ * *delete* what it points at. `..` in an id must not be able to walk out —
+ * normalize() collapses it, and the prefix check is what makes that binding.
+ */
+function recordingDir(id: string): string {
+  const root = recordingsRoot()
+  const dir = path.normalize(path.join(root, id))
+  if (dir !== root && !dir.startsWith(root + path.sep)) {
+    throw new Error('Enregistrement hors du dossier de captures')
+  }
+  return dir
+}
+
+/** Renames a recording. An empty name clears it, falling back to the date. */
+ipcMain.handle('recording:rename', async (_e, id: string, name: string): Promise<RecordingManifest> => {
+  const file = path.join(recordingDir(id), 'manifest.json')
+  const manifest = JSON.parse(await fs.readFile(file, 'utf8')) as RecordingManifest
+  const trimmed = name.trim().slice(0, 120)
+  const next: RecordingManifest = { ...manifest }
+  if (trimmed) next.name = trimmed
+  else delete next.name
+  await fs.writeFile(file, JSON.stringify(next, null, 2), 'utf8')
+  return next
+})
+
+/**
+ * Deletes a recording, to the trash when the platform has one.
+ *
+ * A capture is minutes of work that cannot be re-shot identically, so the
+ * recoverable path is tried first. Permanent removal is the fallback — some
+ * Linux setups have no trash at all — and the caller is told which happened
+ * rather than left to assume.
+ */
+ipcMain.handle('recording:delete', async (_e, id: string): Promise<{ trashed: boolean }> => {
+  const dir = recordingDir(id)
+  try {
+    await shell.trashItem(dir)
+    return { trashed: true }
+  } catch {
+    await fs.rm(dir, { recursive: true, force: true })
+    return { trashed: false }
+  }
+})
+
 /* ------------------------------------------------------------------ *
  * Media import
  * ------------------------------------------------------------------ */

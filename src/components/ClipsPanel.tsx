@@ -138,7 +138,7 @@ export default function ClipsPanel({
           >
             <div className="flex items-center gap-2">
               <span className="flex-1 truncate text-[11px] text-neutral-300">
-                {clip.kind === 'recording' ? 'Capture écran' : clip.name}
+                {clip.kind === 'recording' ? clip.manifest.name || 'Capture écran' : clip.name}
               </span>
               <span className="shrink-0 text-[10px] tabular-nums text-neutral-500">
                 {(clipDuration(clip) / 1000).toFixed(1)}s

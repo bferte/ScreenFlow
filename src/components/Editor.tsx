@@ -190,7 +190,7 @@ export default function Editor({ manifest, onBack }: Props) {
         followCursor: followCursor && framingMode === 'crop' && outAspect < sourceWidth / sourceHeight,
       }
 
-      const segments = generateSegments(telemetry.clicks, zoomOpts)
+      const segments = generateSegments(telemetry.clicks, zoomOpts, telemetry.cursor)
       const track = new ZoomTrack(
         clip.manifest.duration,
         segments,
@@ -253,7 +253,7 @@ export default function Editor({ manifest, onBack }: Props) {
       const telemetry = telemetries.get(clip.manifest.telemetryPath)
       if (!telemetry) continue
       const offset = startT - clip.inMs
-      for (const s of generateSegments(telemetry.clicks, zoomOpts)) {
+      for (const s of generateSegments(telemetry.clicks, zoomOpts, telemetry.cursor)) {
         segs.push({ ...s, clipId: clip.id, startT: s.startT + offset, endT: s.endT + offset })
       }
       for (const c of telemetry.clicks) {
@@ -770,6 +770,15 @@ function ZoomPanel({
         format={(v) => `${Math.round(v)} ms`} onChange={(leadMs) => setOpts((o) => ({ ...o, leadMs }))} />
       <Slider label="Maintien après clic" value={opts.holdMs} min={200} max={3000} step={50}
         format={(v) => `${Math.round(v)} ms`} onChange={(holdMs) => setOpts((o) => ({ ...o, holdMs }))} />
+      <div>
+        <Slider label="Maintien si la souris ne bouge pas" value={opts.dwellMaxMs} min={0} max={15000} step={500}
+          format={(v) => (v === 0 ? 'désactivé' : `${(v / 1000).toFixed(1)} s max`)}
+          onChange={(dwellMaxMs) => setOpts((o) => ({ ...o, dwellMaxMs }))} />
+        <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
+          Le maintien ci-dessus ne démarre qu'une fois le curseur reparti : cliquer dans un
+          champ puis taper garde le zoom sur le champ.
+        </p>
+      </div>
       <Slider label="Réactivité du ressort" value={opts.frequency} min={0.4} max={3} step={0.05}
         format={(v) => `${v.toFixed(2)} Hz`} onChange={(frequency) => setOpts((o) => ({ ...o, frequency }))} />
       <Slider label="Amortissement" value={opts.damping} min={0.5} max={1.2} step={0.05}

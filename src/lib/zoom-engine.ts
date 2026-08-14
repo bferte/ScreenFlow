@@ -49,6 +49,20 @@ export interface ZoomOptions {
    * context is the better shot.
    */
   bridgeMaxDistance: number
+  /**
+   * Keep holding the zoom for as long as the cursor stays put, up to this long
+   * after the last click. 0 disables it.
+   *
+   * Clicking a field and typing into it is one action, but only its first half
+   * is a click: the hold would expire mid-sentence and pull the camera out of
+   * the very field being filled in. A motionless cursor is the signal that
+   * attention has not moved — the keyboard is in use, or the screen is being
+   * read — and it costs no extra capture, since the trajectory is already
+   * recorded.
+   */
+  dwellMaxMs: number
+  /** How far the cursor may drift, normalised, before the dwell is over. */
+  dwellRadius: number
 }
 
 export const DEFAULT_ZOOM_OPTIONS: ZoomOptions = {
@@ -61,6 +75,8 @@ export const DEFAULT_ZOOM_OPTIONS: ZoomOptions = {
   damping: 1,
   bridgeMs: 700,
   bridgeMaxDistance: 0.35,
+  dwellMaxMs: 6000,
+  dwellRadius: 0.05,
 }
 
 export interface ZoomFrame {
@@ -86,9 +102,35 @@ function distance(ax: number, ay: number, bx: number, by: number) {
  * a double-click on one button is one zoom, but clicking opposite corners a
  * second apart is two.
  */
+/**
+ * How long after `fromT` the cursor stays within `radius` of a point.
+ *
+ * Returns 0 as soon as it has already left, so a click followed by a move away
+ * behaves exactly as it did before dwell existed.
+ */
+function dwellAfter(
+  cursor: CursorSample[],
+  fromT: number,
+  nx: number,
+  ny: number,
+  radius: number,
+  maxMs: number,
+): number {
+  if (cursor.length === 0 || maxMs <= 0) return 0
+  let dwell = 0
+  for (const sample of cursor) {
+    if (sample.t < fromT) continue
+    if (sample.t - fromT > maxMs) break
+    if (distance(sample.nx, sample.ny, nx, ny) > radius) break
+    dwell = sample.t - fromT
+  }
+  return dwell
+}
+
 export function generateSegments(
   clicks: ClickEvent[],
   opts: ZoomOptions = DEFAULT_ZOOM_OPTIONS,
+  cursor: CursorSample[] = [],
 ): ZoomSegment[] {
   const downs = clicks.filter((c) => c.pressed).sort((a, b) => a.t - b.t)
   if (downs.length === 0) return []
@@ -112,12 +154,17 @@ export function generateSegments(
   const segments = clusters.map((cluster, i): ZoomSegment => {
     const first = cluster[0]
     const last = cluster[cluster.length - 1]
+    const nx = cluster.reduce((s, c) => s + c.nx, 0) / cluster.length
+    const ny = cluster.reduce((s, c) => s + c.ny, 0) / cluster.length
+    // The hold starts counting from the moment attention leaves, not from the
+    // click: typing into the field just clicked must not run the zoom out.
+    const dwell = dwellAfter(cursor, last.t, nx, ny, opts.dwellRadius, opts.dwellMaxMs)
     return {
       id: `auto-${i}`,
       startT: Math.max(0, first.t - opts.leadMs),
-      endT: last.t + opts.holdMs,
-      nx: cluster.reduce((s, c) => s + c.nx, 0) / cluster.length,
-      ny: cluster.reduce((s, c) => s + c.ny, 0) / cluster.length,
+      endT: last.t + dwell + opts.holdMs,
+      nx,
+      ny,
       scale: opts.scale,
       auto: true,
       clickCount: cluster.length,

@@ -69,6 +69,8 @@ export interface RecordingManifest {
    */
   seekable: boolean
   id: string
+  /** User-given title. Absent on recordings never renamed; the date stands in. */
+  name?: string
   dir: string
   createdAt: number
   duration: number
