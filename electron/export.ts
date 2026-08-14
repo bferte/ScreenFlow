@@ -25,6 +25,8 @@ interface Session {
   stderr: string[]
   framesWritten: number
   failed: Error | null
+  /** Set once ffmpeg is gone, so a later await never waits on a dead process. */
+  exit: { code: number | null } | null
 }
 
 const sessions = new Map<string, Session>()
@@ -80,11 +82,16 @@ export async function startExport(opts: ExportStartOptions): Promise<string> {
     stderr: [],
     framesWritten: 0,
     failed: null,
+    exit: null,
   }
 
   proc.stderr.on('data', (chunk: Buffer) => {
     session.stderr.push(chunk.toString())
     if (session.stderr.length > MAX_STDERR_LINES) session.stderr.shift()
+  })
+
+  proc.on('close', (code) => {
+    session.exit = { code }
   })
 
   // A dead pipe would otherwise surface as an unhandled EPIPE and take the
@@ -100,16 +107,62 @@ export async function startExport(opts: ExportStartOptions): Promise<string> {
   return id
 }
 
+/** ffmpeg's own account of why it stopped, which is the only useful one. */
+function exitError(session: Session): Error {
+  const tail = session.stderr.join('').trim().slice(-2000)
+  return new Error(
+    `ffmpeg s'est arrêté pendant l'export (code ${session.exit?.code ?? '?'})` +
+      (tail ? `\n${tail}` : ''),
+  )
+}
+
+/**
+ * Waits for the pipe to drain, or for ffmpeg to die — whichever comes first.
+ *
+ * Awaiting `drain` alone deadlocks the moment ffmpeg is gone: the event can
+ * never fire again, the renderer's `await` never settles, and the export hangs
+ * with a progress bar frozen mid-count and a Cancel button that cancels
+ * nothing, because the loop checking that flag is itself blocked here.
+ */
+function drainOrExit(session: Session): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      session.proc.stdin.off('drain', onDrain)
+      session.proc.off('close', onClose)
+      session.proc.off('error', onError)
+      session.proc.stdin.off('error', onError)
+    }
+    const onDrain = () => {
+      stop()
+      resolve()
+    }
+    const onClose = () => {
+      stop()
+      reject(exitError(session))
+    }
+    const onError = (err: Error) => {
+      stop()
+      reject(err)
+    }
+
+    session.proc.stdin.on('drain', onDrain)
+    session.proc.on('close', onClose)
+    session.proc.on('error', onError)
+    session.proc.stdin.on('error', onError)
+  })
+}
+
 export async function writeFrame(id: string, frame: ArrayBuffer): Promise<void> {
   const session = sessions.get(id)
   if (!session) throw new Error('Session d’export inconnue')
   if (session.failed) throw session.failed
+  if (session.exit) throw exitError(session)
 
   const buf = Buffer.from(frame)
   // Respect backpressure: PNG frames arrive far faster than libx264 consumes
   // them, and ignoring the return value would grow an unbounded memory queue.
   if (!session.proc.stdin.write(buf)) {
-    await once(session.proc.stdin, 'drain')
+    await drainOrExit(session)
   }
   session.framesWritten++
 }
@@ -123,7 +176,10 @@ export async function finishExport(id: string): Promise<string> {
     if (session.framesWritten === 0) throw new Error('Aucune image envoyée à l’encodeur')
 
     session.proc.stdin.end()
-    const [code] = (await once(session.proc, 'close')) as [number]
+    // Already gone? `once` would wait for an event that has been and gone.
+    const code = session.exit
+      ? session.exit.code
+      : ((await once(session.proc, 'close')) as [number])[0]
 
     if (code !== 0) {
       throw new Error(
