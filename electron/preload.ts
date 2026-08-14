@@ -52,7 +52,10 @@ const api = {
     ipcRenderer.invoke('recording:read-telemetry', telemetryPath),
   reveal: (target: string): Promise<void> => ipcRenderer.invoke('recording:reveal', target),
 
-  importMedia: (): Promise<
+  /** `audio` narrows the file dialog to sound files, e.g. for voiceover. */
+  importMedia: (
+    kind: 'media' | 'audio' = 'media',
+  ): Promise<
     {
       path: string
       name: string
@@ -62,7 +65,7 @@ const api = {
       hasAudio: boolean
       hasVideo: boolean
     }[]
-  > => ipcRenderer.invoke('media:import'),
+  > => ipcRenderer.invoke('media:import', kind),
 
   /**
    * Settings never round-trip an API key: reading reports only whether one is

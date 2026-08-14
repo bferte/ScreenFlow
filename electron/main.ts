@@ -274,11 +274,21 @@ ipcMain.handle('recording:save', async (_e, payload: SavePayload): Promise<Recor
 
   // Rewrite the containers so they carry a duration and cues; without this the
   // editor's <video> reports Infinity and refuses to seek.
-  const remuxed = await Promise.all(
-    [videoPath, micPath, systemAudioPath]
-      .filter((p): p is string => p !== null)
-      .map(remuxInPlace),
-  )
+  //
+  // Belt and braces: remuxInPlace already swallows its own failures, but the
+  // media is on disk by this point and nothing about this step is worth losing
+  // a recording over.
+  let remuxed: boolean[] = []
+  try {
+    remuxed = await Promise.all(
+      [videoPath, micPath, systemAudioPath]
+        .filter((p): p is string => p !== null)
+        .map(remuxInPlace),
+    )
+  } catch (err) {
+    console.warn('[recording] remux ignoré :', err)
+    remuxed = [false]
+  }
 
   const manifest: RecordingManifest = {
     seekable: remuxed.every(Boolean),
@@ -296,6 +306,58 @@ ipcMain.handle('recording:save', async (_e, payload: SavePayload): Promise<Recor
   return manifest
 })
 
+/**
+ * Rebuilds a manifest from the files actually present.
+ *
+ * A recording whose save was interrupted after the media was written but before
+ * the manifest keeps every byte of footage — only the index describing it is
+ * missing. Reconstructing that index is cheap and turns an apparently lost
+ * capture back into a usable one.
+ */
+async function recoverManifest(dir: string, id: string): Promise<RecordingManifest | null> {
+  const videoPath = path.join(dir, 'screen.webm')
+  const telemetryPath = path.join(dir, 'telemetry.json')
+
+  let telemetry: Telemetry
+  try {
+    await fs.access(videoPath)
+    telemetry = JSON.parse(await fs.readFile(telemetryPath, 'utf8')) as Telemetry
+  } catch {
+    return null
+  }
+
+  const optional = async (name: string) => {
+    const p = path.join(dir, name)
+    try {
+      await fs.access(p)
+      return p
+    } catch {
+      return null
+    }
+  }
+
+  // A leftover .remux file means the rename never completed, so the original
+  // was never replaced and still lacks its cues.
+  const strayRemux = await optional('screen.remux.webm')
+  if (strayRemux) await fs.rm(strayRemux, { force: true }).catch(() => undefined)
+
+  const manifest: RecordingManifest = {
+    seekable: strayRemux === null,
+    id,
+    dir,
+    createdAt: (await fs.stat(videoPath)).mtimeMs,
+    duration: telemetry.duration,
+    videoPath,
+    micPath: await optional('mic.webm'),
+    systemAudioPath: await optional('system.webm'),
+    telemetryPath,
+  }
+
+  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
+  console.log('[recording] manifeste reconstruit pour', id)
+  return manifest
+}
+
 ipcMain.handle('recording:list', async (): Promise<RecordingManifest[]> => {
   const root = recordingsRoot()
   let entries: string[]
@@ -307,11 +369,12 @@ ipcMain.handle('recording:list', async (): Promise<RecordingManifest[]> => {
 
   const manifests = await Promise.all(
     entries.map(async (name) => {
+      const dir = path.join(root, name)
       try {
-        const raw = await fs.readFile(path.join(root, name, 'manifest.json'), 'utf8')
+        const raw = await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')
         return JSON.parse(raw) as RecordingManifest
       } catch {
-        return null
+        return recoverManifest(dir, name).catch(() => null)
       }
     }),
   )
@@ -382,13 +445,19 @@ ipcMain.handle('recording:delete', async (_e, id: string): Promise<{ trashed: bo
  * Media import
  * ------------------------------------------------------------------ */
 
-ipcMain.handle('media:import', async () => {
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac', 'webm']
+const MEDIA_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv', 'm4v', ...AUDIO_EXTENSIONS]
+
+ipcMain.handle('media:import', async (_e, kind: 'media' | 'audio' = 'media') => {
   if (!win) return []
+  const audioOnly = kind === 'audio'
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: 'Importer un média',
+    title: audioOnly ? 'Importer un fichier audio' : 'Importer un média',
     properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: 'Médias', extensions: ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'mp3', 'wav', 'm4a', 'aac', 'ogg'] },
+      audioOnly
+        ? { name: 'Audio', extensions: AUDIO_EXTENSIONS }
+        : { name: 'Médias', extensions: MEDIA_EXTENSIONS },
       { name: 'Tous les fichiers', extensions: ['*'] },
     ],
   })

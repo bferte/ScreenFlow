@@ -47,6 +47,21 @@ interface Props {
 /** Preview height; the export panel picks its own. */
 const PREVIEW_HEIGHT = 720
 
+/**
+ * Whether the event came from somewhere the user is typing.
+ *
+ * The space bar toggles playback, which means the shortcut must stand down for
+ * any focused form control — otherwise writing a voiceover line both fails to
+ * insert spaces (preventDefault) and starts the preview on every word.
+ * Checking only `HTMLInputElement` missed textareas, selects and any
+ * contenteditable.
+ */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
 export default function Editor({ manifest, onBack }: Props) {
   const [clips, setClips] = useState<Clip[]>(() => [
     { kind: 'recording', id: `rec-${manifest.id}`, manifest, inMs: 0, outMs: manifest.duration, volume: 1 },
@@ -545,8 +560,10 @@ export default function Editor({ manifest, onBack }: Props) {
 
       // Imported clips carry their own soundtrack, so a jingle must duck under
       // the voiceover exactly like captured system audio does.
-      for (const clip of clipsRef.current) {
-        if (clip.kind === 'media') pool.setVolume(clip.id, clip.volume * gain)
+      if (pool) {
+        for (const clip of clipsRef.current) {
+          if (clip.kind === 'media') pool.setVolume(clip.id, clip.volume * gain)
+        }
       }
     },
     [envelope, audioOpts.ducking, pool],
@@ -630,10 +647,9 @@ export default function Editor({ manifest, onBack }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !(e.target instanceof HTMLInputElement)) {
-        e.preventDefault()
-        togglePlay()
-      }
+      if (e.code !== 'Space' || isTextEntry(e.target)) return
+      e.preventDefault()
+      togglePlay()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -652,10 +668,12 @@ export default function Editor({ manifest, onBack }: Props) {
     (c) => c.kind !== 'recording' || telemetries.has(c.manifest.telemetryPath),
   )
 
-  if (!telemetryReady) {
+  if (!telemetryReady || !pool) {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-neutral-600">Chargement de la télémétrie…</p>
+        <p className="text-sm text-neutral-600">
+          {telemetryReady ? 'Préparation des médias…' : 'Chargement de la télémétrie…'}
+        </p>
       </div>
     )
   }

@@ -16,6 +16,7 @@ interface Entry {
  */
 export class MediaPool {
   private entries = new Map<string, Entry>()
+  private disposed = false
   /** Resync threshold in seconds; below this, drift is imperceptible. */
   private static readonly MAX_DRIFT = 0.08
 
@@ -42,11 +43,10 @@ export class MediaPool {
       console.log('[MediaPool] prêt', clip.id, el.videoWidth + 'x' + el.videoHeight)
     })
     el.addEventListener('error', () => {
-      console.error('[MediaPool] erreur média', clip.id, {
-        code: el.error?.code,
-        message: el.error?.message,
-        src: el.currentSrc,
-      })
+      console.error(
+        `[MediaPool] erreur média ${clip.id} ` +
+          JSON.stringify({ code: el.error?.code, message: el.error?.message, src: el.currentSrc }),
+      )
     })
     this.entries.set(clip.id, entry)
     // Detached elements are not in the document, so nothing else will kick off
@@ -62,7 +62,9 @@ export class MediaPool {
   /** Snapshot for diagnostics: why is nothing drawing? */
   describe(clipId: string) {
     const entry = this.entries.get(clipId)
-    if (!entry) return { missing: true }
+    // Distinguishing the two is what separates "not loaded yet" from "this
+    // pool was disposed and nobody rebuilt it".
+    if (!entry) return this.disposed ? { disposed: true } : { missing: true }
     return {
       ready: entry.ready,
       readyState: entry.el.readyState,
@@ -152,6 +154,7 @@ export class MediaPool {
   }
 
   dispose() {
+    this.disposed = true
     for (const { el } of this.entries.values()) {
       el.pause()
       el.removeAttribute('src')

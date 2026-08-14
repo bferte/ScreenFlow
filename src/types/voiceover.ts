@@ -1,32 +1,52 @@
 export type TtsProvider = 'openai' | 'elevenlabs'
 
 /**
- * A synthesised voiceover placed on the timeline.
+ * A voiceover placed on the timeline.
  *
- * A block only exists once its audio has been generated and cached, which is
- * why `audioPath` is not nullable: an ungenerated line is a draft in the panel,
- * not an object on the timeline. That split is what makes moving a block
- * trivially safe — nothing about a move can invalidate the audio.
+ * A block only exists once its audio is on disk, which is why `audioPath` is
+ * not nullable: an unsynthesised line is a draft in the panel, not an object on
+ * the timeline. That split is what makes moving a block trivially safe —
+ * nothing about a move can invalidate the audio.
  *
  * Times are milliseconds, matching telemetry, clips and the ducking curve.
  * A seconds-based field sitting next to `startT`/`inMs` everywhere else is how
  * factor-of-1000 bugs get in.
  */
-export interface VoiceoverBlock {
+interface VoiceoverBlockBase {
   id: string
+  /** Label on the timeline. For synthesised blocks, the spoken text itself. */
   text: string
-  /** Voice name (OpenAI) or voice id (ElevenLabs). */
-  voiceId: string
-  provider: TtsProvider
-  /** File in the local cache. Never refetched once written. */
+  /** Audio on disk: the TTS cache, or a file the user imported. */
   audioPath: string
-  /** Exact length of the generated audio. */
   durationMs: number
   /** Start position on the timeline. The only field a drag changes. */
   timelineOffsetMs: number
   /** Linear gain, 1 = unchanged. */
   volume: number
 }
+
+/** Synthesised here, and therefore re-synthesisable from its text. */
+export interface TtsVoiceoverBlock extends VoiceoverBlockBase {
+  origin: 'tts'
+  provider: TtsProvider
+  /** Voice name (OpenAI) or voice id (ElevenLabs). */
+  voiceId: string
+}
+
+/**
+ * Audio produced elsewhere and imported as-is.
+ *
+ * Split from the synthesised case rather than left as optional fields: an
+ * imported file has no provider and no source text, so "regenerate" is
+ * meaningless for it. Making that a type distinction stops the UI from ever
+ * offering the action, instead of relying on a runtime check nobody maintains.
+ */
+export interface ImportedVoiceoverBlock extends VoiceoverBlockBase {
+  origin: 'imported'
+  fileName: string
+}
+
+export type VoiceoverBlock = TtsVoiceoverBlock | ImportedVoiceoverBlock
 
 /** Panel-only state for a line being written or generated. */
 export interface VoiceoverDraft {

@@ -127,13 +127,21 @@ const SequencePlayer = forwardRef<SequencePlayerHandle, Props>(function Sequence
       // three possible causes and guessing between them is expensive.
       if (!drawn && now - lastDiagRef.current > 1000) {
         lastDiagRef.current = now
-        console.warn('[SequencePlayer] rien à dessiner', {
-          t: Math.round(t),
-          clipId,
-          runtime: clipId ? !!rendererRef.current.runtimes.get(clipId) : null,
-          hasVideo: clipId ? rendererRef.current.runtimes.get(clipId)?.hasVideo : null,
-          media: clipId ? poolRef.current.describe(clipId) : null,
-        })
+        const runtime = clipId ? rendererRef.current.runtimes.get(clipId) : undefined
+        // Serialised, not passed as an object: the main process forwards
+        // console output as a preformatted string, where an object collapses
+        // to "[object Object]" and the diagnostic becomes worthless.
+        console.warn(
+          '[SequencePlayer] rien à dessiner ' +
+            JSON.stringify({
+              t: Math.round(t),
+              clipId,
+              knownRuntimes: [...rendererRef.current.runtimes.keys()],
+              hasRuntime: !!runtime,
+              hasVideo: runtime?.hasVideo ?? null,
+              media: clipId ? poolRef.current.describe(clipId) : null,
+            }),
+        )
       }
 
       // The canvas redraws every frame, React does not need to. 60 state
